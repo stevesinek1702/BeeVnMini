@@ -322,6 +322,18 @@ def compact_columns(filters):
     return [c for c in COLUMNS if c[0] == 'symbol' or c[0] in active]
 
 
+EXCHANGE_COL = ('exchange', 'Sàn')
+EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
+
+
+def table_columns(cfg, full):
+    """Cột hiện ra. Lọc cả 3 sàn thì thêm cột Sàn ngay sau Mã CP để biết mã nào sàn nào."""
+    cols = list(COLUMNS) if full else compact_columns(cfg.get('filters'))
+    if cfg.get('exchange') == 'ALL':
+        cols.insert(1, EXCHANGE_COL)
+    return cols
+
+
 def describe_filters(filters):
     return ' · '.join(f"{LABEL.get(k, k)} {OPS.get(filters[k].get('operator'), '?')} {js_num(filters[k]['value'])}"
                       for k in active_filter_keys(filters))
@@ -369,6 +381,8 @@ def format_cell(s, key):
     plus = '+' if change > 0 else ''
     if key == 'symbol':
         return s.get('symbol') or '', 'sym'
+    if key == 'exchange':
+        return EXCHANGE_SHORT.get(s.get('exchange'), s.get('exchange') or ''), 'muted'
     if key == 'price':
         return format_price(s.get('price')), tone
     if key == 'change':

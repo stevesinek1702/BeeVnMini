@@ -50,6 +50,14 @@ class LocGiongWeb(unittest.TestCase):
         # Cột thiếu số (None) luôn xuống cuối khi giảm dần
         self.assertEqual([s['symbol'] for s in core.sort_stocks([HPG, VIB], 'demandStrength', 'desc')], ['VIB', 'HPG'])
 
+    def test_ca_3_san_them_cot_san(self):
+        cfg = {'exchange': 'ALL', 'filters': FILTERS}
+        self.assertEqual([c[0] for c in core.table_columns(cfg, False)],
+                         ['symbol', 'exchange', 'price', 'changePercent', 'volume'])
+        self.assertEqual(len(core.table_columns(cfg, True)), 12)
+        self.assertNotIn('exchange', [c[0] for c in core.table_columns({**cfg, 'exchange': 'HSX'}, True)])
+        self.assertEqual(core.format_cell({'exchange': 'UPCOM'}, 'exchange'), ('UpCom', 'muted'))
+
     def test_dinh_dang_giong_hang_vib(self):
         self.assertEqual(core.format_cell(VIB, 'price'), ('14.2', 'up'))
         self.assertEqual(core.format_cell(VIB, 'change')[0], '+0.3')

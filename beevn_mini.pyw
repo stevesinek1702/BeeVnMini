@@ -62,7 +62,7 @@ TEXT, MUTED, ACCENT, GOLD = '#e6e6f0', '#8a8aa8', '#38bdf8', '#fbbf24'
 TONE = {'up': '#22c55e', 'down': '#ef4444', 'flat': '#eab308', 'muted': MUTED, 'sym': ACCENT, '': TEXT}
 FILTERED = '#f87171'
 
-EXCHANGE_LABEL = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom', 'ALL': '3 sàn'}
+EXCHANGE_LABEL = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom', 'ALL': 'Cả 3 sàn'}
 OP_LABEL = [('gt', 'Lớn hơn (>)'), ('lt', 'Nhỏ hơn (<)'), ('eq', 'Bằng (=)')]
 
 FONT = ('Segoe UI', 10)
@@ -242,6 +242,12 @@ class App:
         m.add_command(label='Cài đặt bộ lọc…', command=self.open_settings)
         m.add_command(label='Về góc dưới-phải màn hình', command=self.reset_position)
         m.add_separator()
+        # Đổi sàn nhanh, khỏi mở Cài đặt
+        self.exchange_var = tk.StringVar(value=self.cfg['exchange'])
+        for key in ('HSX', 'HNX', 'UPCOM', 'ALL'):
+            m.add_radiobutton(label='Sàn: ' + EXCHANGE_LABEL[key], value=key, variable=self.exchange_var,
+                              command=lambda k=key: self.apply_settings({'exchange': k}))
+        m.add_separator()
         m.add_command(label='Tắt chương trình', command=self.quit)
         self.menu = m
 
@@ -326,7 +332,7 @@ class App:
         self.offset = max(0, min(self.offset, max(0, len(rows) - MAX_ROWS)))
         visible = rows[self.offset:self.offset + MAX_ROWS]
         if visible:
-            cols = core.COLUMNS if full else core.compact_columns(filters)
+            cols = core.table_columns(cfg, full)
             active = set(core.active_filter_keys(filters))
             for ci, (key, label) in enumerate(cols):
                 txt = label.upper() + (' •' if key in active else '')
@@ -459,6 +465,7 @@ class App:
 
     def apply_settings(self, new_cfg):
         self.cfg.update(new_cfg)
+        self.exchange_var.set(self.cfg['exchange'])
         self.root.attributes('-alpha', self.cfg.get('opacity', 1.0))
         save_json(CONFIG_PATH, self.cfg)
         self.offset = 0
