@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.request
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -32,6 +33,12 @@ import core  # noqa: E402
 from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
+# Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.1.0'
+# Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
+UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
+              or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
+UPDATE_CHECK_SEC = 6 * 3600
 # BEEVN_DATA_DIR: chỉ để chạy thử mà không đụng cài đặt thật
 DATA_DIR = os.environ.get('BEEVN_DATA_DIR') or os.path.join(os.environ.get('APPDATA', HERE), 'BeeVnMini')
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
@@ -252,6 +259,9 @@ class App:
         self.render()
         threading.Thread(target=self.quote_loop, daemon=True).start()
         threading.Thread(target=self.hist_loop, daemon=True).start()
+        self.update_info = None
+        if FROZEN:            # chỉ bản .exe tự cập nhật; bản chạy từ mã nguồn thì cập nhật bằng git
+            threading.Thread(target=self.update_loop, daemon=True).start()
         if lock is not None:
             threading.Thread(target=self.listen_loop, args=(lock,), daemon=True).start()
         root.after(200, self.poll_queue)
@@ -275,10 +285,17 @@ class App:
                    ('↻', 'Tải lại ngay', self.refresh_now)]
         for text, tip, cmd in buttons:
             b = tk.Label(h, text=text, bg=HEAD, fg=MUTED, font=('Segoe UI Symbol', 10), cursor='hand2', padx=4)
+            if text == '↻':
+                self.refresh_btn = b
             b.pack(side='right')
             b.bind('<Button-1>', lambda e, c=cmd: c())
             b.bind('<Enter>', lambda e, w=b: w.config(fg=TEXT))
             b.bind('<Leave>', lambda e, w=b: w.config(fg=MUTED))
+
+        # Có bản mới → hiện nút ⬆ vàng bên trái các nút
+        self.update_btn = tk.Label(h, text='⬆ Cập nhật', bg=GOLD, fg=HEAD, font=('Segoe UI', 8, 'bold'),
+                                   cursor='hand2', padx=5)
+        self.update_btn.bind('<Button-1>', lambda e: self.do_update())
 
         # Kéo thanh trên cùng để dời cửa sổ
         for w in (h, title, self.meta) + tuple(title.winfo_children()):
@@ -302,6 +319,7 @@ class App:
                               command=lambda k=key: self.apply_settings({'exchange': k}))
         m.add_separator()
         if FROZEN:
+            m.add_command(label=f'Kiểm tra cập nhật (đang dùng v{APP_VERSION})', command=self.check_update_now)
             m.add_command(label='Gỡ khỏi máy…', command=self.uninstall)
         m.add_command(label='Tắt chương trình', command=self.quit)
         self.menu = m
@@ -557,7 +575,7 @@ class App:
         remove_all_shortcuts()
         if os.path.normcase(sys.executable) == os.path.normcase(INSTALLED_EXE):
             # File đang chạy không tự xoá được → nhờ cmd xoá sau khi chương trình tắt
-            subprocess.Popen(f'cmd /c timeout /t 3 /nobreak >nul & rmdir /s /q "{INSTALL_DIR}"',
+            subprocess.Popen(f'cmd /c ping -n 4 127.0.0.1 >nul & rmdir /s /q "{INSTALL_DIR}"',
                              creationflags=0x08000000)
         self.root.destroy()
 
@@ -634,10 +652,98 @@ class App:
                 conn, _ = lock.accept()
                 with conn:
                     conn.settimeout(2)
-                    if conn.recv(16).startswith(b'show'):
+                    msg = conn.recv(16)
+                    if msg.startswith(b'show'):
                         self.q.put(('show',))
+                    elif msg.startswith(b'update') and self.update_info:   # chạy thử: cập nhật không hỏi
+                        threading.Thread(target=self.download_update, args=(self.update_info,), daemon=True).start()
             except OSError:
                 time.sleep(1)
+
+    # ── Tự cập nhật (bản .exe) ──
+    def fetch_update(self):
+        req = urllib.request.Request(f'{UPDATE_URL}?t={int(time.time())}', headers={'User-Agent': core.UA})
+        with urllib.request.urlopen(req, timeout=20) as res:
+            return core.parse_update(json.loads(res.read().decode('utf-8')), APP_VERSION)
+
+    def update_loop(self):
+        time.sleep(20)
+        while True:
+            try:
+                info = self.fetch_update()
+                if info:
+                    self.q.put(('update', info))
+            except Exception as e:
+                log('update check: ' + repr(e))
+            time.sleep(UPDATE_CHECK_SEC)
+
+    def check_update_now(self):
+        def run():
+            try:
+                info = self.fetch_update()
+                self.q.put(('update', info) if info else ('update_none',))
+            except Exception as e:
+                log('update check: ' + repr(e))
+                self.q.put(('update_fail', 'Không kiểm tra được bản mới (mất mạng?).'))
+        threading.Thread(target=run, daemon=True).start()
+
+    def show_update(self, info):
+        self.update_info = info
+        self.update_btn.pack(side='right', padx=(0, 4), after=self.refresh_btn)
+        self.fit()
+
+    def do_update(self):
+        info = self.update_info
+        if not info:
+            return
+        notes = ('\n\nCó gì mới:\n' + info['notes']) if info['notes'] else ''
+        if not messagebox.askyesno(APP_NAME, f'Có bản mới v{info["version"]} (đang dùng v{APP_VERSION}).'
+                                             f'{notes}\n\nCập nhật ngay? Bảng giá tắt vài giây rồi tự mở lại.',
+                                   parent=self.root):
+            return
+        self.update_btn.config(text='đang tải…')
+        threading.Thread(target=self.download_update, args=(info,), daemon=True).start()
+
+    def download_update(self, info):
+        import hashlib
+        target = sys.executable
+        new = target + '.new'
+        try:
+            req = urllib.request.Request(info['url'], headers={'User-Agent': core.UA})
+            h = hashlib.sha256()
+            got = 0
+            with urllib.request.urlopen(req, timeout=60) as res, open(new, 'wb') as f:
+                while True:
+                    chunk = res.read(256 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    h.update(chunk)
+                    got += len(chunk)
+                    if info['size']:
+                        self.q.put(('update_progress', got / info['size']))
+            if h.hexdigest() != info['sha256']:
+                raise ValueError('file tải về không khớp mã kiểm tra')
+        except Exception as e:
+            log('update download: ' + repr(e))
+            try:
+                os.remove(new)
+            except OSError:
+                pass
+            self.q.put(('update_fail', f'Tải bản mới không được: {e}'))
+            return
+        # File .exe đang chạy không ghi đè được → nhờ cmd đợi chương trình tắt hẳn rồi thay và mở lại.
+        bat = os.path.join(os.path.dirname(target), 'beevn_update.cmd')
+        with open(bat, 'w', encoding='mbcs', errors='replace', newline='') as f:
+            # ping thay cho timeout: timeout của Windows báo lỗi khi chạy không có cửa sổ
+            cmd_lines = ['@echo off', 'set n=0', ':retry',
+                         f'move /y "{new}" "{target}" >nul 2>&1',
+                         'if not errorlevel 1 goto done', 'set /a n+=1', 'if %n% geq 60 goto done',
+                         'ping -n 2 127.0.0.1 >nul', 'goto retry', ':done',
+                         f'start "" "{target}"', 'del "%~f0"']
+            f.write('\r\n'.join(cmd_lines) + '\r\n')
+        subprocess.Popen(['cmd', '/c', bat], creationflags=0x08000000)   # không hiện cửa sổ
+        self.q.put(('update_restart',))
 
     def bring_front(self):
         """Hiện bảng giá lên trước mặt, kéo về trong màn hình nếu đang lạc ra ngoài, nháy viền vàng."""
@@ -665,6 +771,22 @@ class App:
                     if self.hist.get('source') == 'fireant':
                         self.stat_note = None
                     self.compute()
+                elif kind == 'update':
+                    self.show_update(payload[0])
+                    continue
+                elif kind == 'update_none':
+                    messagebox.showinfo(APP_NAME, f'Đang dùng bản mới nhất (v{APP_VERSION}).', parent=self.root)
+                    continue
+                elif kind == 'update_progress':
+                    self.update_btn.config(text=f'đang tải {int(payload[0] * 100)}%')
+                    continue
+                elif kind == 'update_fail':
+                    self.update_btn.config(text='⬆ Cập nhật')
+                    messagebox.showwarning(APP_NAME, payload[0], parent=self.root)
+                    continue
+                elif kind == 'update_restart':
+                    self.root.destroy()
+                    return
                 elif kind == 'show':
                     self.bring_front()
                     continue

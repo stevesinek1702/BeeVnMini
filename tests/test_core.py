@@ -94,6 +94,18 @@ class LocGiongWeb(unittest.TestCase):
         self.assertEqual(vi, 'Mã mới: A 1, B 2, C 3, D 4, E 5, và 2 mã khác.')
         self.assertTrue(en.endswith('and 2 more.'))
 
+    def test_so_phien_ban_va_ban_moi(self):
+        self.assertGreater(core.version_tuple('1.10.0'), core.version_tuple('1.9.9'))
+        self.assertEqual(core.version_tuple('v1.2'), (1, 2))
+        good = {'version': '1.2.0', 'url': 'https://raw.githubusercontent.com/x/y/release/BeeVnMini.exe',
+                'sha256': 'a' * 64, 'size': 123, 'notes': 'Sửa màu'}
+        self.assertEqual(core.parse_update(good, '1.1.0')['version'], '1.2.0')
+        self.assertIsNone(core.parse_update(good, '1.2.0'))                 # đã là bản mới nhất
+        self.assertIsNone(core.parse_update(good, '1.3.0'))
+        self.assertIsNone(core.parse_update({**good, 'url': 'http://x'}, '1.0'))  # không https → bỏ
+        self.assertIsNone(core.parse_update({**good, 'sha256': 'abc'}, '1.0'))    # thiếu mã kiểm tra → bỏ
+        self.assertIsNone(core.parse_update(None, '1.0'))
+
     def test_mo_ta_bo_loc(self):
         self.assertEqual(core.describe_filters(FILTERS), 'Giá < 20 · % Thay đổi > 2 · KLGD > 1000000')
 

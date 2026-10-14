@@ -64,11 +64,24 @@ Máy người nhận **không cần cài Python** hay gì khác. Họ làm:
    tự mở khi bật máy, bảng giá hiện góc dưới-phải.
 4. Bấm **⚙** để đặt bộ lọc.
 
-Bản chia sẻ dùng chung sheet cookie FireAnt của anh Si cho cột MA. Gửi bản mới thì người nhận chỉ
-cần bấm đúp file mới → *"Cập nhật?"* → **Yes** (tắt bảng giá cũ bằng ✕ trước nếu nó báo đang chạy).
+Bản chia sẻ dùng chung sheet cookie FireAnt của anh Si cho cột MA.
 Gỡ: chuột phải lên bảng giá → **Gỡ khỏi máy…**
 
-Sửa code xong muốn ra file .exe mới: bấm đúp **`Dong goi exe.bat`** (chạy test trước, ~1 phút).
+Link tải luôn là bản mới nhất: https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/BeeVnMini.exe
+
+### Tự cập nhật
+
+Từ v1.1.0, máy đã cài **tự kiểm tra bản mới mỗi 6 tiếng**. Có bản mới → hiện nút vàng
+**⬆ Cập nhật** trên bảng giá → bấm → **Yes**: tự tải, kiểm tra mã sha256, thay file, mở lại
+(vài giây). Muốn kiểm tra ngay: chuột phải → *Kiểm tra cập nhật*.
+
+Máy nào đang dùng bản trước v1.1.0 (chưa có nút này) thì phải cập nhật tay **một lần**: gửi file
+mới, bấm đúp → *"Cập nhật?"* → **Yes**.
+
+Phát hành bản mới (người sửa code): tăng `APP_VERSION` trong `beevn_mini.pyw`, rồi
+`python tools/release.py "ghi chú có gì mới"` — chạy test, đóng gói, đẩy `main` và ghi đè nhánh
+`release` (chỉ chứa `BeeVnMini.exe` + `latest.json`) lên GitHub `stevesinek1702/BeeVnMini`.
+Bấm đúp **`Dong goi exe.bat`** nếu chỉ muốn ra file .exe để gửi tay, không phát hành.
 
 ## Gỡ
 

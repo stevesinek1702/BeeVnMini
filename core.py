@@ -362,6 +362,29 @@ def alert_text(symbols, limit=5):
     return vi, en
 
 
+def version_tuple(v):
+    """'1.2.10' → (1, 2, 10); chữ lạ coi như 0 để không vỡ."""
+    out = []
+    for part in str(v or '').strip().lstrip('vV').split('.'):
+        digits = ''.join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def parse_update(info, current):
+    """Đọc latest.json của nhánh release. Trả dict bản mới nếu mới hơn bản đang chạy, không thì None."""
+    if not isinstance(info, dict):
+        return None
+    ver, url, sha = info.get('version'), info.get('url'), info.get('sha256')
+    secure = isinstance(url, str) and (url.startswith('https://') or url.startswith('http://127.0.0.1'))  # 127.0.0.1: chạy thử
+    if not (ver and secure and isinstance(sha, str) and len(sha) == 64):
+        return None
+    if version_tuple(ver) <= version_tuple(current):
+        return None
+    return {'version': str(ver), 'url': url, 'sha256': sha.lower(), 'size': int(info.get('size') or 0),
+            'notes': str(info.get('notes') or '')}
+
+
 EXCHANGE_COL = ('exchange', 'Sàn')
 EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
 
