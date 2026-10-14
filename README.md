@@ -6,7 +6,8 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 - **1 mã = 1 hàng.** Nhiều mã thì cửa sổ dài thêm lên trên, giống chồng thông báo.
 - **Thu gọn:** chỉ *Mã CP* + các cột đang lọc (cột có chấm đỏ). **Bấm vào bảng** → đủ 11 cột như bảng giá Bee.vn.
 - Tự lấy giá **30 giây/lần** trong giờ giao dịch (8:45–15:15, thứ 2–6), ngoài giờ 10 phút/lần.
-- Có **mã mới** lọt vào bộ lọc → hàng đó sáng vàng vài giây + kêu "ting" (tắt được).
+- Có **mã mới** lọt vào bộ lọc → hàng đó sáng vàng vài giây + **đọc to tên mã** bằng giọng tiếng Việt
+  của Windows ("Mã mới: V I B, M B B"). Đổi sang kêu "ting" hoặc im lặng trong ⚙ (có nút *Nghe thử*).
 - **Không cần đăng nhập**, không cần mở Chrome.
 
 ## Cài đặt (1 lần)
@@ -70,6 +71,7 @@ Bấm đúp **`Go cai dat.bat`** (xoá biểu tượng Desktop + bỏ tự chạ
 | File | Việc |
 |---|---|
 | `beevn_mini.pyw` | Cửa sổ (tkinter), luồng lấy giá / lịch sử, cài đặt, tạo biểu tượng |
+| `speak.ps1` | Đọc to bằng giọng Windows — ưu tiên giọng tiếng Việt *Microsoft An*, máy không có thì đọc tiếng Anh |
 | `core.py` | Lấy dữ liệu, lọc / sắp xếp / định dạng giống bảng giá Bee.vn — không dính giao diện |
 | `symbols.py` | ~1.600 mã HOSE/HNX/UPCoM — mã mới niêm yết thì thêm vào đây |
 | `tests/` | `python -m unittest discover -s tests -t .` |

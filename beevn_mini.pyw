@@ -38,10 +38,13 @@ CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 HIST_PATH = os.path.join(DATA_DIR, 'hist.json')
 LOG_PATH = os.path.join(DATA_DIR, 'log.txt')
 ICON_PATH = os.path.join(RES_DIR, 'beevn.ico')
+SPEAK_PS = os.path.join(RES_DIR, 'speak.ps1')
 # Bản .exe cài vào đây (copy từ file người dùng tải về); biểu tượng Desktop / tự chạy trỏ vào đây
 INSTALL_DIR = os.path.join(os.environ.get('LOCALAPPDATA', HERE), 'BeeVnMini')
 INSTALLED_EXE = os.path.join(INSTALL_DIR, 'BeeVnMini.exe')
 SINGLE_INSTANCE_PORT = 47651
+
+ALERT_LABEL = [('speak', 'Đọc tên mã'), ('beep', 'Kêu "ting"'), ('off', 'Im lặng')]
 
 ON_HOURS_SEC = 30
 OFF_HOURS_SEC = 600
@@ -57,7 +60,7 @@ DEFAULT_CONFIG = {
     'sortDirection': 'desc',
     'mode': 'compact',
     'anchor': None,       # [phải, dưới] của cửa sổ, tính bằng pixel màn hình
-    'sound': True,
+    'alert': 'speak',     # có mã mới lọt lọc: 'speak' đọc tên mã | 'beep' kêu ting | 'off' im lặng
     'opacity': 1.0,
     # Google Sheet có cookie FireAnt ở ô D2 sheet Dashboard. Anh Si cho mọi người dùng chung sheet này
     # (14/10/2026); xoá trống trong Cài đặt thì máy đó thôi dùng FireAnt, tự tính MA từ VNDirect.
@@ -186,7 +189,12 @@ def virtual_screen():
 class App:
     def __init__(self, root):
         self.root = root
-        self.cfg = {**DEFAULT_CONFIG, **load_json(CONFIG_PATH, {})}
+        saved = load_json(CONFIG_PATH, {})
+        self.cfg = {**DEFAULT_CONFIG, **saved}
+        if 'alert' not in saved and saved.get('sound') is False:   # cài đặt cũ: đã tắt tiếng
+            self.cfg['alert'] = 'off'
+        self.speaker = None          # tiến trình đang đọc to
+        self.pending_say = []        # mã mới đến lúc đang đọc dở → đọc tiếp sau
         self.hist = load_json(HIST_PATH, {})
         self.quotes = None
         self.fetched_at = None
@@ -317,14 +325,39 @@ class App:
                 until = time.time() + NEW_HIGHLIGHT_SEC
                 for s in fresh:
                     self.new_until[s] = until
-                if self.cfg.get('sound'):
-                    try:
-                        import winsound
-                        winsound.MessageBeep(0x40)
-                    except Exception:
-                        pass
+                # Theo thứ tự đang hiện trên bảng (GTGD lớn trước)
+                self.alert([s['symbol'] for s in self.matches if s['symbol'] in fresh])
                 self.root.after(int(NEW_HIGHLIGHT_SEC * 1000) + 100, self.render)
         self.prev_symbols, self.prev_key = syms, key
+
+    def alert(self, symbols, mode=None):
+        mode = mode or self.cfg.get('alert', 'speak')
+        if mode == 'off' or not symbols:
+            return
+        if mode == 'speak':
+            if self.speaker and self.speaker.poll() is None:
+                self.pending_say += [s for s in symbols if s not in self.pending_say]
+                return
+            vi, en = core.alert_text(symbols)
+            try:
+                self.speaker = subprocess.Popen(
+                    ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_PS],
+                    env={**os.environ, 'BEEVN_SAY': vi, 'BEEVN_SAY_EN': en},
+                    creationflags=0x08000000)
+                return
+            except OSError as e:
+                log('speak: ' + repr(e))   # không đọc được → kêu ting thay
+        try:
+            import winsound
+            winsound.MessageBeep(0x40)
+        except Exception:
+            pass
+
+    def say_pending(self):
+        """Đọc nốt những mã mới đến trong lúc đang đọc dở."""
+        if self.pending_say and not (self.speaker and self.speaker.poll() is None):
+            syms, self.pending_say = self.pending_say, []
+            self.alert(syms)
 
     def render(self):
         cfg = self.cfg
@@ -592,6 +625,7 @@ class App:
             pass
         if changed:
             self.render()
+        self.say_pending()
         self.root.after(300, self.poll_queue)
 
 
@@ -651,9 +685,11 @@ class SettingsWindow:
         self.opacity = tk.DoubleVar(value=cfg.get('opacity', 1.0))
         ttk.Scale(body, from_=0.5, to=1.0, variable=self.opacity, length=150).grid(row=r + 2, column=1, sticky='w')
 
-        self.sound = tk.BooleanVar(value=cfg.get('sound', True))
-        ttk.Checkbutton(body, text='Kêu "ting" khi có mã mới lọt vào bộ lọc', variable=self.sound) \
-            .grid(row=r + 3, column=0, columnspan=3, sticky='w', pady=(8, 2))
+        ttk.Label(body, text='Khi có mã mới').grid(row=r + 3, column=0, sticky='w', pady=(8, 2))
+        self.alert = ttk.Combobox(body, state='readonly', width=16, values=[n for _, n in ALERT_LABEL])
+        self.alert.set(dict(ALERT_LABEL).get(cfg.get('alert', 'speak'), ALERT_LABEL[0][1]))
+        self.alert.grid(row=r + 3, column=1, sticky='w', pady=(8, 2))
+        ttk.Button(body, text='Nghe thử', command=self.test_alert).grid(row=r + 3, column=2, sticky='w', pady=(8, 2))
         self.startup = tk.BooleanVar(value=has_startup())
         ttk.Checkbutton(body, text='Tự mở khi bật máy', variable=self.startup) \
             .grid(row=r + 4, column=0, columnspan=3, sticky='w', pady=2)
@@ -685,6 +721,14 @@ class SettingsWindow:
         w.bind('<Destroy>', lambda e: e.widget is w and app.root.attributes('-topmost', True))
         w.after(100, lambda: (w.lift(), w.focus_force()))
 
+    def alert_mode(self):
+        return {n: k for k, n in ALERT_LABEL}.get(self.alert.get(), 'speak')
+
+    def test_alert(self):
+        # Đọc thử 2 mã đầu đang khớp lọc, chưa có thì lấy mã mẫu
+        sample = [s['symbol'] for s in self.app.matches[:2]] or ['VIB', 'MBB']
+        self.app.alert(sample, mode=self.alert_mode())
+
     def save(self):
         name_to_op = {n: k for k, n in OP_LABEL}
         filters, bad = {}, []
@@ -711,7 +755,7 @@ class SettingsWindow:
             'filters': filters,
             'sortColumn': label_to_col.get(self.sort_col.get(), 'value'),
             'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc',
-            'sound': self.sound.get(),
+            'alert': self.alert_mode(),
             'opacity': round(self.opacity.get(), 2),
             'cookieSheetId': sheet,
         })

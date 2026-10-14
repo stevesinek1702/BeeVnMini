@@ -333,6 +333,21 @@ def compact_columns(filters):
     return [c for c in COLUMNS if c[0] == 'symbol' or c[0] in active]
 
 
+def spell(symbol):
+    """Tách mã thành từng chữ để giọng đọc đọc "V I B" chứ không đọc thành một từ "vịp"."""
+    return ' '.join(symbol)
+
+
+def alert_text(symbols, limit=5):
+    """Câu đọc to khi có mã mới lọt lọc: (tiếng Việt, tiếng Anh dự phòng khi máy không có giọng Việt)."""
+    syms = list(symbols)
+    head = [spell(s) for s in syms[:limit]]
+    rest = len(syms) - len(head)
+    vi = 'Mã mới: ' + ', '.join(head) + (f', và {rest} mã khác' if rest > 0 else '') + '.'
+    en = 'New: ' + ', '.join(head) + (f', and {rest} more' if rest > 0 else '') + '.'
+    return vi, en
+
+
 EXCHANGE_COL = ('exchange', 'Sàn')
 EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
 

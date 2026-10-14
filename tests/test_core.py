@@ -75,6 +75,12 @@ class LocGiongWeb(unittest.TestCase):
         self.assertEqual(core.format_price(13.95), '13.9')   # 13.95 thật ra là 13.9499999…, JS cũng ra 13.9
         self.assertEqual(core.format_volume(999), '999')
 
+    def test_cau_doc_ma_moi(self):
+        self.assertEqual(core.alert_text(['VIB', 'MBB']), ('Mã mới: V I B, M B B.', 'New: V I B, M B B.'))
+        vi, en = core.alert_text(['A1', 'B2', 'C3', 'D4', 'E5', 'F6', 'G7'])
+        self.assertEqual(vi, 'Mã mới: A 1, B 2, C 3, D 4, E 5, và 2 mã khác.')
+        self.assertTrue(en.endswith('and 2 more.'))
+
     def test_mo_ta_bo_loc(self):
         self.assertEqual(core.describe_filters(FILTERS), 'Giá < 20 · % Thay đổi > 2 · KLGD > 1000000')
 
