@@ -22,7 +22,10 @@ import traceback
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# Chạy dạng .exe (PyInstaller) thì file đi kèm (icon) nằm trong thư mục giải nén tạm _MEIPASS
+FROZEN = getattr(sys, 'frozen', False)
+HERE = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
+RES_DIR = getattr(sys, '_MEIPASS', HERE)
 sys.path.insert(0, HERE)
 
 import core  # noqa: E402
@@ -34,7 +37,10 @@ DATA_DIR = os.environ.get('BEEVN_DATA_DIR') or os.path.join(os.environ.get('APPD
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 HIST_PATH = os.path.join(DATA_DIR, 'hist.json')
 LOG_PATH = os.path.join(DATA_DIR, 'log.txt')
-ICON_PATH = os.path.join(HERE, 'beevn.ico')
+ICON_PATH = os.path.join(RES_DIR, 'beevn.ico')
+# Bản .exe cài vào đây (copy từ file người dùng tải về); biểu tượng Desktop / tự chạy trỏ vào đây
+INSTALL_DIR = os.path.join(os.environ.get('LOCALAPPDATA', HERE), 'BeeVnMini')
+INSTALLED_EXE = os.path.join(INSTALL_DIR, 'BeeVnMini.exe')
 SINGLE_INSTANCE_PORT = 47651
 
 ON_HOURS_SEC = 30
@@ -53,6 +59,10 @@ DEFAULT_CONFIG = {
     'anchor': None,       # [phải, dưới] của cửa sổ, tính bằng pixel màn hình
     'sound': True,
     'opacity': 1.0,
+    # Google Sheet có cookie FireAnt ở ô D2 sheet Dashboard. Anh Si cho mọi người dùng chung sheet này
+    # (14/10/2026); xoá trống trong Cài đặt thì máy đó thôi dùng FireAnt, tự tính MA từ VNDirect.
+    'cookieSheetId': '1IaSyUm5opJttxGgJa_4ucDSWEzEJQYaTFVTwYtBiH9c',
+    'askedInstall': False,
 }
 
 # Màu giống cửa sổ extension / web Bee.vn
@@ -111,18 +121,35 @@ def _ps(script):
 
 
 def shortcut_path(folder):
+    if os.environ.get('BEEVN_SHORTCUT_DIR'):      # chỉ để chạy thử, khỏi đụng Desktop thật
+        return os.path.join(os.environ['BEEVN_SHORTCUT_DIR'], folder, APP_NAME + '.lnk')
     r = _ps(f"[Environment]::GetFolderPath('{folder}')")
     return os.path.join(r.stdout.strip(), APP_NAME + '.lnk')
 
 
+def launch_target():
+    """(chương trình, tham số, thư mục, icon) cho biểu tượng Desktop / tự chạy."""
+    if FROZEN:
+        exe = INSTALLED_EXE if os.path.exists(INSTALLED_EXE) else sys.executable
+        return exe, '', os.path.dirname(exe), exe
+    return _pythonw(), '"%s"' % os.path.abspath(__file__), HERE, ICON_PATH
+
+
 def make_shortcut(folder):
     lnk = shortcut_path(folder)
+    target, args, workdir, icon = launch_target()
+
+    def q(v):
+        return v.replace("'", "''")
     script = (
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');"
-        "$s.TargetPath='%s';$s.Arguments='\"%s\"';$s.WorkingDirectory='%s';"
+        "$s.TargetPath='%s';$s.Arguments='%s';$s.WorkingDirectory='%s';"
         "$s.IconLocation='%s';$s.Description='Bảng giá mini Bee.vn';$s.Save()"
-    ) % (lnk, _pythonw(), os.path.abspath(__file__), HERE, ICON_PATH)
-    return _ps(script).returncode == 0
+    ) % (q(lnk), q(target), q(args), q(workdir), q(icon))
+    r = _ps(script)
+    if r.returncode != 0:
+        log('shortcut: ' + r.stderr)
+    return r.returncode == 0
 
 
 def remove_shortcut(folder):
@@ -173,6 +200,7 @@ class App:
         self.offset = 0
         self.q = queue.Queue()
         self.wake = threading.Event()
+        self.wake_hist = threading.Event()
         self.drag = None
         self.settings_win = None
 
@@ -248,6 +276,8 @@ class App:
             m.add_radiobutton(label='Sàn: ' + EXCHANGE_LABEL[key], value=key, variable=self.exchange_var,
                               command=lambda k=key: self.apply_settings({'exchange': k}))
         m.add_separator()
+        if FROZEN:
+            m.add_command(label='Gỡ khỏi máy…', command=self.uninstall)
         m.add_command(label='Tắt chương trình', command=self.quit)
         self.menu = m
 
@@ -456,6 +486,18 @@ class App:
                                parent=self.root):
             self.root.destroy()
 
+    def uninstall(self):
+        if not messagebox.askyesno(APP_NAME, 'Gỡ Bee.vn mini khỏi máy?\n\nXoá biểu tượng ngoài Desktop, '
+                                             'bỏ tự mở khi bật máy và tắt chương trình.', parent=self.root):
+            return
+        remove_shortcut('Desktop')
+        remove_shortcut('Startup')
+        if os.path.normcase(sys.executable) == os.path.normcase(INSTALLED_EXE):
+            # File đang chạy không tự xoá được → nhờ cmd xoá sau khi chương trình tắt
+            subprocess.Popen(f'cmd /c timeout /t 3 /nobreak >nul & rmdir /s /q "{INSTALL_DIR}"',
+                             creationflags=0x08000000)
+        self.root.destroy()
+
     # ── Cài đặt ──
     def open_settings(self):
         if self.settings_win and self.settings_win.winfo_exists():
@@ -493,9 +535,12 @@ class App:
             try:
                 today = core.vn_date(time.time())
                 hist = self.hist if self.hist.get('day') == today else {'day': today, 'data': {}}
-                if hist.get('source') != 'fireant':
+                sheet = self.cfg.get('cookieSheetId')
+                if not sheet:
+                    self.q.put(('stat_note', None))
+                if sheet and hist.get('source') != 'fireant':
                     try:
-                        cookie = core.fetch_fireant_cookie(self.cfg.get('cookieSheetId') or core.COOKIE_SHEET_ID)
+                        cookie = core.fetch_fireant_cookie(sheet)
                         if not cookie:
                             raise core.CookieExpired('ô D2 trống')
                         hist = {'day': today, 'data': core.fetch_trading_stats(cookie), 'source': 'fireant'}
@@ -516,7 +561,8 @@ class App:
                     self.q.put(('hist', hist, len(data) / len(SYMBOLS)))
             except Exception:
                 log('hist: ' + traceback.format_exc())
-            time.sleep(HIST_CHECK_SEC)
+            self.wake_hist.wait(HIST_CHECK_SEC)
+            self.wake_hist.clear()
 
     def poll_queue(self):
         changed = False
@@ -612,8 +658,18 @@ class SettingsWindow:
         ttk.Checkbutton(body, text='Tự mở khi bật máy', variable=self.startup) \
             .grid(row=r + 4, column=0, columnspan=3, sticky='w', pady=2)
 
+        ttk.Separator(body).grid(row=r + 5, column=0, columnspan=3, sticky='ew', pady=10)
+        ttk.Label(body, text='Sheet cookie FireAnt (tuỳ chọn)', font=('Segoe UI', 9, 'bold')) \
+            .grid(row=r + 6, column=0, columnspan=3, sticky='w')
+        ttk.Label(body, text='Dán link Google Sheet có cookie FireAnt ở ô D2 sheet "Dashboard" → cột MA lấy '
+                             'thẳng FireAnt.\nĐể trống → MA tự tính từ VNDirect.', foreground='#666') \
+            .grid(row=r + 7, column=0, columnspan=3, sticky='w', pady=(2, 4))
+        self.sheet = ttk.Entry(body, width=70)
+        self.sheet.insert(0, cfg.get('cookieSheetId') or '')
+        self.sheet.grid(row=r + 8, column=0, columnspan=3, sticky='ew')
+
         btns = ttk.Frame(body)
-        btns.grid(row=r + 5, column=0, columnspan=3, sticky='e', pady=(12, 0))
+        btns.grid(row=r + 9, column=0, columnspan=3, sticky='e', pady=(12, 0))
         ttk.Button(btns, text='Đóng', command=w.destroy).pack(side='right')
         ttk.Button(btns, text='Lưu', command=self.save).pack(side='right', padx=6)
         self.saved = ttk.Label(btns, text='', foreground='#16a34a')
@@ -643,6 +699,11 @@ class SettingsWindow:
         if bad:
             messagebox.showwarning(APP_NAME, 'Giá trị không phải số: ' + ', '.join(bad), parent=self.win)
             return
+        sheet_raw = self.sheet.get().strip()
+        sheet = core.sheet_id_from(sheet_raw)
+        if sheet_raw and not sheet:
+            messagebox.showwarning(APP_NAME, 'Không nhận ra link Google Sheet.', parent=self.win)
+            return
         label_to_ex = {v: k for k, v in EXCHANGE_LABEL.items()}
         label_to_col = {l: k for k, l in core.COLUMNS}
         self.app.apply_settings({
@@ -652,7 +713,10 @@ class SettingsWindow:
             'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc',
             'sound': self.sound.get(),
             'opacity': round(self.opacity.get(), 2),
+            'cookieSheetId': sheet,
         })
+        self.app.hist['source'] = None   # đổi sheet → thử lại FireAnt ngay
+        self.app.wake_hist.set()
         if self.startup.get() != has_startup():
             if self.startup.get():
                 make_shortcut('Startup')
@@ -660,6 +724,42 @@ class SettingsWindow:
                 remove_shortcut('Startup')
         self.saved.config(text='✓ Đã lưu')
         self.win.after(1500, lambda: self.saved.winfo_exists() and self.saved.config(text=''))
+
+
+def offer_install(lock):
+    """Chạy file .exe vừa tải về (chưa nằm trong máy): hỏi cài. Trả True nếu đã chuyển sang bản cài."""
+    cfg = {**DEFAULT_CONFIG, **load_json(CONFIG_PATH, {})}
+    updating = os.path.exists(INSTALLED_EXE)
+    if not updating and cfg.get('askedInstall'):
+        return False          # đã từ chối cài lần trước → chạy luôn từ chỗ này
+    r = tk.Tk()
+    r.withdraw()
+    ask = ('Cập nhật Bee.vn mini lên bản này?' if updating else
+           'Cài Bee.vn mini vào máy?\n\n• Tạo biểu tượng "Bee.vn mini" ngoài Desktop\n'
+           '• Tự mở mỗi khi bật máy\n\nChọn "No" để chỉ chạy thử lần này.')
+    yes = messagebox.askyesno(APP_NAME, ask)
+    if not yes:
+        r.destroy()
+        cfg['askedInstall'] = True
+        save_json(CONFIG_PATH, cfg)
+        return False
+    try:
+        import shutil
+        os.makedirs(INSTALL_DIR, exist_ok=True)
+        shutil.copy2(sys.executable, INSTALLED_EXE)
+        ok = make_shortcut('Desktop') & make_shortcut('Startup')
+    except OSError as e:
+        log('install: ' + repr(e))
+        messagebox.showerror(APP_NAME, 'Không cài được: ' + str(e))
+        r.destroy()
+        return False
+    messagebox.showinfo(APP_NAME, ('Đã cập nhật.' if updating else 'Đã cài xong.') +
+                        '\n\nBảng giá mini sẽ hiện ở góc dưới-phải màn hình.' +
+                        ('' if ok else '\n(Không tạo được biểu tượng Desktop — xem ' + LOG_PATH + ')'))
+    r.destroy()
+    lock.close()             # nhả khoá để bản cài mở lên được
+    subprocess.Popen([INSTALLED_EXE], cwd=INSTALL_DIR)
+    return True
 
 
 def main():
@@ -692,7 +792,16 @@ def main():
     try:
         lock.bind(('127.0.0.1', SINGLE_INSTANCE_PORT))
     except OSError:
+        if FROZEN and os.path.normcase(sys.executable) != os.path.normcase(INSTALLED_EXE):
+            r = tk.Tk()
+            r.withdraw()
+            messagebox.showinfo(APP_NAME, 'Bee.vn mini đang chạy rồi.\n\nMuốn cài bản mới: bấm ✕ trên bảng giá '
+                                          'mini để tắt, rồi mở lại file này.')
         return
+
+    if FROZEN and os.path.normcase(sys.executable) != os.path.normcase(INSTALLED_EXE):
+        if offer_install(lock):
+            return
 
     root = tk.Tk()
     root.title(APP_NAME)

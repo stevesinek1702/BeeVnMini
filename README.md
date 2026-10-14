@@ -37,11 +37,29 @@ Từ đó về sau nó tự mở mỗi khi bật máy. Lỡ tắt thì bấm đ�
 | Cột | Nguồn |
 |---|---|
 | Giá, Thay đổi, % Thay đổi, KLGD, GTGD, Lực cầu | FireAnt (công khai) — cùng nguồn bảng giá Bee.vn |
-| MA10, MA20, MA45, % KL/TB | **Ưu tiên** FireAnt TradingStatistic bằng cookie ở ô **D2** sheet *Dashboard* ([sheet cookie](https://docs.google.com/spreadsheets/d/1IaSyUm5opJttxGgJa_4ucDSWEzEJQYaTFVTwYtBiH9c/edit)) — số khớp y hệt web. Cookie hết hạn → tự tính từ lịch sử ngày VNDirect (mất ~1 phút sau khi mở). |
+| MA10, MA20, MA45, % KL/TB | FireAnt TradingStatistic bằng cookie ở ô **D2** sheet *Dashboard* (sheet của anh Si, dùng chung; đổi / xoá trong ⚙) — số khớp y hệt web. Cookie hết hạn → tự tính từ lịch sử ngày VNDirect (mất ~1 phút sau khi mở). |
 
 Ở chế độ đầy đủ, dòng trên bảng ghi rõ đang dùng nguồn nào: `MA: FireAnt` hoặc
 `MA: tự tính từ VNDirect (cookie FireAnt hết hạn)`. Cookie được làm mới trong sheet thì trong
 vòng 10 phút chương trình tự chuyển sang FireAnt.
+
+## Chia sẻ cho người khác
+
+Gửi đúng **một file**: `D:\BeeVnMini\dist\BeeVnMini.exe` (~11 MB, qua Zalo / Google Drive / USB).
+Máy người nhận **không cần cài Python** hay gì khác. Họ làm:
+
+1. Bấm đúp `BeeVnMini.exe`.
+2. Windows có thể hiện màn hình xanh *"Windows protected your PC"* (vì file chưa có chữ ký số của
+   công ty phần mềm — không phải virus): bấm **More info** → **Run anyway**.
+3. Hỏi *"Cài Bee.vn mini vào máy?"* → bấm **Yes** → **OK**. Xong: có biểu tượng ngoài Desktop,
+   tự mở khi bật máy, bảng giá hiện góc dưới-phải.
+4. Bấm **⚙** để đặt bộ lọc.
+
+Bản chia sẻ dùng chung sheet cookie FireAnt của anh Si cho cột MA. Gửi bản mới thì người nhận chỉ
+cần bấm đúp file mới → *"Cập nhật?"* → **Yes** (tắt bảng giá cũ bằng ✕ trước nếu nó báo đang chạy).
+Gỡ: chuột phải lên bảng giá → **Gỡ khỏi máy…**
+
+Sửa code xong muốn ra file .exe mới: bấm đúp **`Dong goi exe.bat`** (chạy test trước, ~1 phút).
 
 ## Gỡ
 

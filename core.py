@@ -22,7 +22,8 @@ from decimal import Decimal, ROUND_HALF_UP
 QUOTES_URL = 'https://www.fireant.vn/api/Data/Markets/Quotes?symbols='
 TRADING_STAT_URL = 'https://www.fireant.vn/api/Data/Markets/TradingStatistic'
 # Ô D2 sheet "Dashboard" — nơi cookie FireAnt được làm mới tự động. Đọc dạng CSV (sheet chia sẻ bằng link).
-COOKIE_SHEET_ID = '1IaSyUm5opJttxGgJa_4ucDSWEzEJQYaTFVTwYtBiH9c'
+# KHÔNG ghi sẵn ID sheet ở đây: cookie là phiên đăng nhập FireAnt của chủ sheet, chia sẻ chương trình
+# mà kèm ID thì ai cũng dùng được tài khoản đó. Mỗi người tự điền sheet của mình trong Cài đặt.
 COOKIE_SHEET_URL = ('https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Dashboard&range=D2')
 # TradingStatistic chỉ chịu đúng bộ header này (lấy từ Excel M code / server Bee.vn)
 STAT_UA = ('Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 '
@@ -115,7 +116,17 @@ class CookieExpired(Exception):
     """Cookie FireAnt hết hạn / sai → FireAnt đẩy về trang đăng nhập."""
 
 
-def fetch_fireant_cookie(sheet_id=COOKIE_SHEET_ID):
+def sheet_id_from(text):
+    """Nhận link Google Sheet hoặc ID trần, trả ID ('' nếu không nhận ra)."""
+    import re
+    text = (text or '').strip()
+    m = re.search(r'/spreadsheets/d/([A-Za-z0-9_-]{20,})', text)
+    if m:
+        return m.group(1)
+    return text if re.fullmatch(r'[A-Za-z0-9_-]{20,}', text) else ''
+
+
+def fetch_fireant_cookie(sheet_id):
     """Đọc cookie từ ô D2. Trả None nếu ô trống / không phải cookie FireAnt."""
     import csv
     import io

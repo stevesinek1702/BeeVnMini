@@ -143,6 +143,13 @@ class FireAntCookie(unittest.TestCase):
         r = core.transform_quote(VIB_Q, out['VIB'])
         self.assertEqual(r['volRatio'], 95)        # 4.505.800 / 4.728.061
 
+    def test_nhan_link_hoac_id_sheet(self):
+        sid = 'AbCdEfGhIjKlMnOpQrStUvWxYz_0123456789-xy'
+        self.assertEqual(core.sheet_id_from(f'https://docs.google.com/spreadsheets/d/{sid}/edit?gid=0#gid=0'), sid)
+        self.assertEqual(core.sheet_id_from('  ' + sid + ' '), sid)
+        self.assertEqual(core.sheet_id_from('khong phai link'), '')
+        self.assertEqual(core.sheet_id_from(''), '')
+
     def test_phan_hoi_rong_hoac_sai_la_cookie_het_han(self):
         for bad in ([], {'Message': 'Authorization has been denied for this request.'}, None):
             with self.assertRaises(core.CookieExpired):
