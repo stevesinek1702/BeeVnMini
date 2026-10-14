@@ -69,6 +69,9 @@ class LocGiongWeb(unittest.TestCase):
         self.assertEqual([r['symbol'] for r in core.sort_stocks(rows, 'exchange', 'asc')], ['B', 'C', 'A'])
 
     def test_dinh_dang_giong_hang_vib(self):
+        self.assertEqual(core.format_cell(VIB, 'symbol'), ('VIB', 'up'))       # mã cùng màu với giá
+        self.assertEqual(core.format_cell(FPT, 'symbol'), ('FPT', 'down'))
+        self.assertEqual(core.HEAD_LABEL['changePercent'], '%')
         self.assertEqual(core.format_cell(VIB, 'price'), ('14.2', 'up'))
         self.assertEqual(core.format_cell(VIB, 'change')[0], '+0.3')
         self.assertEqual(core.format_cell(VIB, 'changePercent'), ('+2.54%', 'up'))

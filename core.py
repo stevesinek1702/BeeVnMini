@@ -60,6 +60,8 @@ COLUMNS = [
     ('demandStrength', 'Lực cầu'),
 ]
 LABEL = dict(COLUMNS)
+# Tiêu đề cột trên bảng mini — ghi gọn cho đỡ chiếm chỗ (Cài đặt / dòng mô tả lọc vẫn ghi đủ)
+HEAD_LABEL = {**LABEL, 'changePercent': '%'}
 FILTERABLE = [c for c in COLUMNS if c[0] != 'symbol']
 OPS = {'gt': '>', 'lt': '<', 'eq': '='}
 
@@ -418,7 +420,7 @@ def format_cell(s, key):
     tone = 'up' if change > 0 else ('down' if change < 0 else 'flat')
     plus = '+' if change > 0 else ''
     if key == 'symbol':
-        return s.get('symbol') or '', 'sym'
+        return s.get('symbol') or '', tone      # mã CP cùng màu với giá: tăng xanh lá, giảm đỏ, đứng giá vàng
     if key == 'exchange':
         return EXCHANGE_SHORT.get(s.get('exchange'), s.get('exchange') or ''), 'muted'
     if key == 'price':

@@ -417,7 +417,7 @@ class App:
             sort_col, sort_dir = cfg.get('sortColumn'), cfg.get('sortDirection')
             for ci, (key, label) in enumerate(cols):
                 arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
-                txt = label.upper() + (' •' if key in active else '') + arrow
+                txt = core.HEAD_LABEL.get(key, label).upper() + (' •' if key in active else '') + arrow
                 fg = FILTERED if key in active else (TEXT if key == sort_col else MUTED)
                 lbl = tk.Label(self.table, text=txt, bg=BG, fg=fg,
                                font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
