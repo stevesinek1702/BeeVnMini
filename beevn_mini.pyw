@@ -34,7 +34,7 @@ from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.2.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.3.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -57,7 +57,9 @@ ON_HOURS_SEC = 30
 OFF_HOURS_SEC = 600
 HIST_CHECK_SEC = 600
 STALE_SEC = 120
-MAX_ROWS = 25            # quá số này thì lăn chuột để xem tiếp
+MAX_ROWS = 25            # 1 tiêu chí: quá số hàng này thì lăn chuột để xem tiếp
+SECTION_ROWS = 8         # nhiều tiêu chí: mỗi khối mặc định hiện chừng này hàng (＋/－ để đổi)
+WHEEL_ROWS = 2           # mỗi nấc lăn chuột trượt 2 hàng
 NEW_HIGHLIGHT_SEC = 6
 
 DEFAULT_CONFIG = {
@@ -230,7 +232,7 @@ class App:
         self.new_until = {}
         self.sections = []           # [(tiêu chí, [mã khớp])] — chỉ tiêu chí đã có điều kiện
         self.matches = []            # gộp mọi khối, không trùng mã
-        self.offset = 0
+        self.scroll_pos = {}          # {tên tiêu chí: vị trí cuộn 0..1} — giữ nguyên khi giá cập nhật
         self.q = queue.Queue()
         self.wake = threading.Event()
         self.wake_hist = threading.Event()
@@ -248,10 +250,10 @@ class App:
         self.filters_lbl = tk.Label(self.frame, bg=BG, fg=MUTED, font=FONT_SMALL, anchor='w')
         self.table = tk.Frame(self.frame, bg=BG)
         self.table.pack(fill='x')
+        self.table_body = None        # khung bảng hiện tại; vẽ khung mới xong mới thay → không nháy
         self.msg = tk.Label(self.frame, bg=BG, fg=MUTED, font=('Segoe UI', 9), justify='left',
                             anchor='w', wraplength=300)
         self.msg.pack(fill='x', padx=8, pady=(0, 6))
-        self.more_lbl = tk.Label(self.frame, bg=BG, fg=MUTED, font=FONT_SMALL)
 
         self._build_menu()
         for w in (self.frame, self.table):
@@ -462,28 +464,18 @@ class App:
         else:
             self.filters_lbl.pack_forget()
 
-        # Bảng: mỗi tiêu chí một khối
-        for w in self.table.winfo_children():
-            w.destroy()
+        # Bảng: mỗi tiêu chí một khối. Dựng khung mới (chưa hiện) rồi mới tháo khung cũ → một lần vẽ, không nháy.
         total = sum(len(m) for _, m in sections)
-        self.total_rows = total
-        self.offset = max(0, min(self.offset, max(0, total - MAX_ROWS)))
-        lo, hi = self.offset, self.offset + MAX_ROWS
-        idx = 0
-        shown = 0
-        for c, m in sections:
-            vis = [st for i, st in enumerate(m, idx) if lo <= i < hi]
-            idx += len(m)
-            if m and not vis:
-                continue                    # khối đã lăn qua hết
-            self._render_section(c, m, vis, full, multi)
-            shown += len(vis)
-        hidden = total - shown
-        if hidden > 0:
-            self.more_lbl.config(text=f'lăn chuột để xem thêm {hidden} mã')
-            self.more_lbl.pack(after=self.table, pady=(0, 3))
-        else:
-            self.more_lbl.pack_forget()
+        body = tk.Frame(self.table, bg=BG)
+        built = [self._build_section(body, c, m, full, multi) for c, m in sections]
+        self._align_sections(built)
+        if self.table_body is not None:
+            self.table_body.destroy()
+        body.pack(fill='x')
+        self.table_body = body
+        for b in built:
+            if b.get('canvas') is not None:
+                b['canvas'].yview_moveto(self.scroll_pos.get(b['name'], 0.0))
 
         # Thông điệp
         if self.quotes is None and not self.error:
@@ -504,59 +496,150 @@ class App:
 
         self.fit()
 
-    def _render_section(self, c, matches, visible, full, multi):
-        box = tk.Frame(self.table, bg=BG)
+    def section_rows(self, name, multi):
+        return int(self.cfg.get('sectionRows', {}).get(name, SECTION_ROWS if multi else MAX_ROWS))
+
+    def _build_section(self, parent, c, matches, full, multi):
+        """Dựng 1 khối: dòng tên (gập/mở, －/＋) → tiêu đề cột (đứng yên) → danh sách mã (cuộn riêng)."""
+        name = c['name']
+        info = {'name': name, 'grids': [], 'canvas': None, 'widths': None}
+        box = tk.Frame(parent, bg=BG)
         box.pack(fill='x')
-        for w in (box,):
-            w.bind('<MouseWheel>', self.on_wheel)
-            w.bind('<Button-3>', self.show_menu)
+        collapsed = multi and name in self.cfg.get('collapsed', [])
+        limit = self.section_rows(name, multi)
+
         if multi:
+            bar = tk.Frame(box, bg=SECTION)
+            bar.pack(fill='x', pady=(2, 0))
             ex = EXCHANGE_LABEL.get(c['exchange'], c['exchange'])
-            title = tk.Label(box, text=f'{c["name"]}  ·  {ex}  ·  {len(matches)} mã', bg=SECTION, fg=GOLD,
-                             font=('Segoe UI', 8, 'bold'), anchor='w', padx=8)
-            title.pack(fill='x', pady=(2, 0))
-            self._bind_table(title)
+            more = f'  ·  lăn ↕ xem đủ' if (not collapsed and len(matches) > limit) else ''
+            title = tk.Label(bar, text=f'{"▸" if collapsed else "▾"} {name}  ·  {ex}  ·  {len(matches)} mã{more}',
+                             bg=SECTION, fg=GOLD, font=('Segoe UI', 8, 'bold'), anchor='w', padx=8, cursor='hand2')
+            title.pack(side='left', fill='x', expand=True)
+            title.bind('<Button-1>', lambda e: self.toggle_section(name))
+            title.bind('<Button-3>', self.show_menu)
+            if not collapsed:
+                for txt, d in (('＋', +3), ('－', -3)):
+                    b = tk.Label(bar, text=txt, bg=SECTION, fg=MUTED, font=('Segoe UI', 9, 'bold'),
+                                 padx=5, cursor='hand2')
+                    b.pack(side='right')
+                    b.bind('<Button-1>', lambda e, d=d: self.resize_section(name, d, len(matches)))
+                    b.bind('<Enter>', lambda e, w=b: w.config(fg=TEXT))
+                    b.bind('<Leave>', lambda e, w=b: w.config(fg=MUTED))
+            if collapsed:
+                return info
             if full:
                 d = tk.Label(box, text=core.describe_filters(c['filters']), bg=BG, fg=MUTED, font=FONT_SMALL,
                              anchor='w', padx=8)
                 d.pack(fill='x')
                 self._bind_table(d)
         if not matches:
-            e = tk.Label(box, text='chưa có mã nào khớp', bg=BG, fg=MUTED, font=FONT_SMALL, anchor='w', padx=8)
-            e.pack(fill='x', pady=(1, 3))
-            self._bind_table(e)
-            return
-        grid = tk.Frame(box, bg=BG)
-        grid.pack(fill='x')
-        grid.bind('<MouseWheel>', self.on_wheel)
+            if multi:
+                e = tk.Label(box, text='chưa có mã nào khớp', bg=BG, fg=MUTED, font=FONT_SMALL, anchor='w', padx=8)
+                e.pack(fill='x', pady=(1, 3))
+                self._bind_table(e)
+            return info
+
         cols = core.table_columns(c, full)
         active = set(core.active_filter_keys(c['filters']))
         sort_col, sort_dir = self.cfg.get('sortColumn'), self.cfg.get('sortDirection')
+
+        # Tiêu đề cột — nằm ngoài vùng cuộn nên luôn thấy
+        head = tk.Frame(box, bg=BG)
+        head.pack(fill='x')
+        head_cells = []
         for ci, (key, label) in enumerate(cols):
             arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
             txt = core.HEAD_LABEL.get(key, label).upper() + (' •' if key in active else '') + arrow
             fg = FILTERED if key in active else (TEXT if key == sort_col else MUTED)
-            lbl = tk.Label(grid, text=txt, bg=BG, fg=fg,
+            lbl = tk.Label(head, text=txt, bg=BG, fg=fg,
                            font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
             lbl.grid(row=0, column=ci, sticky='ew', pady=(3, 2))
             # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ)
             lbl.bind('<Button-1>', lambda e, k=key: self.sort_by(k))
-            lbl.bind('<MouseWheel>', self.on_wheel)
             lbl.bind('<Button-3>', self.show_menu)
+            head_cells.append(lbl)
+
+        # Danh sách mã: dài hơn giới hạn thì nằm trong vùng cuộn riêng của khối
+        scroll = len(matches) > limit
+        if scroll:
+            canvas = tk.Canvas(box, bg=BG, highlightthickness=0, bd=0)
+            canvas.pack(fill='x')
+            rows_frame = tk.Frame(canvas, bg=BG)
+            win_id = canvas.create_window(0, 0, window=rows_frame, anchor='nw')
+            # Cửa sổ rộng hơn bảng → kéo khung hàng theo cho nền hàng phủ kín
+            canvas.bind('<Configure>', lambda e, cv=canvas, i=win_id: cv.itemconfig(i, width=e.width))
+            info['canvas'] = canvas
+        else:
+            canvas = None
+            rows_frame = tk.Frame(box, bg=BG)
+            rows_frame.pack(fill='x')
+        wheel = (lambda e, cv=canvas, n=name: self.on_wheel(e, cv, n)) if scroll else None
+        if wheel:
+            for w in (canvas, rows_frame, head) + tuple(head_cells):
+                w.bind('<MouseWheel>', wheel)
+
         now = time.time()
-        for ri, st in enumerate(visible, 1):
-            bg = NEW_BG if self.new_until.get(st['symbol'], 0) > now else (ALT if ri % 2 == 0 else BG)
+        row_cells = []
+        for ri, st in enumerate(matches):
+            bg = NEW_BG if self.new_until.get(st['symbol'], 0) > now else (ALT if ri % 2 == 1 else BG)
             for ci, (key, _) in enumerate(cols):
                 text, tone = core.format_cell(st, key)
-                lbl = tk.Label(grid, text=text, bg=bg, fg=TONE.get(tone, TEXT),
+                lbl = tk.Label(rows_frame, text=text, bg=bg, fg=TONE.get(tone, TEXT),
                                font=FONT_BOLD if key == 'symbol' else FONT,
                                anchor='w' if ci == 0 else 'e', padx=8)
                 lbl.grid(row=ri, column=ci, sticky='ew')
                 self._bind_table(lbl)
-        tk.Frame(grid, bg=BG, height=4).grid(row=len(visible) + 1, column=0)
-        # Cột cuối giãn ra cho kín bề ngang khi khối khác / thanh tiêu đề rộng hơn
-        for ci in range(len(cols)):
-            grid.grid_columnconfigure(ci, weight=1 if ci == len(cols) - 1 else 0)
+                if wheel:
+                    lbl.bind('<MouseWheel>', wheel)
+                row_cells.append((ci, lbl))
+        tk.Frame(box, bg=BG, height=4).pack(fill='x')
+
+        # Đo bề ngang từng cột (lấy max của tiêu đề + mọi hàng) để tiêu đề và hàng thẳng cột với nhau
+        widths = [lbl.winfo_reqwidth() for lbl in head_cells]
+        row_h = 0
+        for ci, lbl in row_cells:
+            widths[ci] = max(widths[ci], lbl.winfo_reqwidth())
+            row_h = max(row_h, lbl.winfo_reqheight())
+        info.update(widths=widths, grids=[head, rows_frame], row_h=row_h, n=len(matches), limit=limit)
+        return info
+
+    def _align_sections(self, built):
+        """Đặt bề ngang cột cho từng khối; khối hẹp được kéo cột cuối cho bằng khối rộng nhất."""
+        widest = max([sum(b['widths']) for b in built if b.get('widths')] + [0])
+        for b in built:
+            if not b.get('widths'):
+                continue
+            widths = list(b['widths'])
+            widths[-1] += widest - sum(widths)
+            for g in b['grids']:
+                for ci, w in enumerate(widths):
+                    g.grid_columnconfigure(ci, minsize=w, weight=1 if ci == len(widths) - 1 else 0)
+            rows_frame = b['grids'][1]
+            for ri in range(b['n']):
+                rows_frame.grid_rowconfigure(ri, minsize=b['row_h'])
+            cv = b.get('canvas')
+            if cv is not None:
+                cv.config(width=widest, height=b['row_h'] * b['limit'], yscrollincrement=b['row_h'],
+                          scrollregion=(0, 0, widest, b['row_h'] * b['n']))
+
+    def toggle_section(self, name):
+        col = list(self.cfg.get('collapsed', []))
+        if name in col:
+            col.remove(name)
+        else:
+            col.append(name)
+        self.cfg['collapsed'] = col
+        save_json(CONFIG_PATH, self.cfg)
+        self.render()
+
+    def resize_section(self, name, delta, n):
+        rows = dict(self.cfg.get('sectionRows', {}))
+        cur = self.section_rows(name, True)
+        rows[name] = max(2, min(cur + delta, max(n, 2), 40))
+        self.cfg['sectionRows'] = rows
+        save_json(CONFIG_PATH, self.cfg)
+        self.render()
 
     def _bind_table(self, w):
         w.bind('<Button-1>', lambda e: self.toggle_mode())
@@ -578,14 +661,17 @@ class App:
             right, bottom = right - 12, bottom - 12
         right = min(max(right, vl + w), vr)
         bottom = min(max(bottom, vt + h), vb)
-        self.root.geometry(f'{w}x{h}+{int(right - w)}+{int(bottom - h)}')
+        geo = f'{w}x{h}+{int(right - w)}+{int(bottom - h)}'
+        if geo != getattr(self, '_last_geo', None):
+            self.root.geometry(geo)
+            self._last_geo = geo
 
     # ── Tương tác ──
     def sort_by(self, key):
         col, direction = core.next_sort(self.cfg.get('sortColumn'), self.cfg.get('sortDirection'), key)
         self.cfg['sortColumn'], self.cfg['sortDirection'] = col, direction
         save_json(CONFIG_PATH, self.cfg)
-        self.offset = 0
+        self.scroll_pos = {}
         self.compute()
         self.render()
 
@@ -594,11 +680,13 @@ class App:
         save_json(CONFIG_PATH, self.cfg)
         self.render()
 
-    def on_wheel(self, e):
-        if getattr(self, 'total_rows', 0) <= MAX_ROWS:
+    def on_wheel(self, e, canvas=None, name=None):
+        """Lăn chuột trên khối nào chỉ cuộn danh sách của khối đó — không vẽ lại gì nên không nháy."""
+        if canvas is None:
             return
-        self.offset += -3 if e.delta > 0 else 3
-        self.render()
+        canvas.yview_scroll(-WHEEL_ROWS if e.delta > 0 else WHEEL_ROWS, 'units')
+        self.scroll_pos[name] = canvas.yview()[0]
+        return 'break'
 
     def drag_start(self, e):
         self.drag = (e.x_root - self.root.winfo_x(), e.y_root - self.root.winfo_y())
@@ -606,6 +694,7 @@ class App:
     def drag_move(self, e):
         if self.drag:
             self.root.geometry(f'+{e.x_root - self.drag[0]}+{e.y_root - self.drag[1]}')
+            self._last_geo = None
 
     def drag_end(self, e):
         if self.drag:
@@ -666,7 +755,7 @@ class App:
         self._build_menu()            # số tiêu chí đổi → menu đổi sàn nhanh có/không
         self.root.attributes('-alpha', self.cfg.get('opacity', 1.0))
         save_json(CONFIG_PATH, self.cfg)
-        self.offset = 0
+        self.scroll_pos = {}
         self.compute()
         self.render()
 

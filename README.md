@@ -35,7 +35,9 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 | Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP / Sàn xếp A → Z |
 | Xem đủ cột / thu gọn | Bấm vào các hàng mã (hoặc nút ⤢) |
 | Dời chỗ (kể cả sang màn hình khác) | Giữ chuột vào thanh trên cùng (chỗ chữ Bee.vn) rồi kéo — lần sau mở lại đúng chỗ đó |
-| Nhiều mã quá dài | Lăn chuột trên bảng |
+| Nhiều mã quá dài | Lăn chuột trên khối đó — chỉ danh sách khối đó trượt, tên tiêu chí + tiêu đề cột đứng yên |
+| Gập / mở 1 tiêu chí | Bấm vào dòng tên tiêu chí (▾ mở, ▸ gập) |
+| Khối hiện nhiều / ít hàng hơn | Nút **＋ / －** bên phải dòng tên tiêu chí (mặc định 8 hàng) |
 | Tải lại ngay | Nút **↻** |
 | Menu (về góc màn hình, tắt…) | Bấm chuột phải lên bảng |
 | Tắt | Nút **✕** |
@@ -48,7 +50,7 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 | Cột | Nguồn |
 |---|---|
 | Giá, Thay đổi, % Thay đổi, KLGD, GTGD, Lực cầu | FireAnt (công khai) — cùng nguồn bảng giá Bee.vn |
-| MA10, MA20, MA45, % KL/TB | FireAnt TradingStatistic bằng cookie ở ô **D2** sheet *Dashboard* (sheet của anh Si, dùng chung; đổi / xoá trong ⚙) — số khớp y hệt web. Cookie hết hạn → tự tính từ lịch sử ngày VNDirect (mất ~1 phút sau khi mở). |
+| MA10, MA20, MA45, % KL/TB (KL hôm nay so với **trung bình 45 phiên**) | FireAnt TradingStatistic bằng cookie ở ô **D2** sheet *Dashboard* (sheet của anh Si, dùng chung; đổi / xoá trong ⚙) — số khớp y hệt web. Cookie hết hạn → tự tính từ lịch sử ngày VNDirect (mất ~1 phút sau khi mở). |
 
 Ở chế độ đầy đủ, dòng trên bảng ghi rõ đang dùng nguồn nào: `MA: FireAnt` hoặc
 `MA: tự tính từ VNDirect (cookie FireAnt hết hạn)`. Cookie được làm mới trong sheet thì trong
