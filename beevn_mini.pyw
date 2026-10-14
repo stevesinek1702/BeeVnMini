@@ -34,7 +34,7 @@ from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.1.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.2.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -81,6 +81,7 @@ ALT, NEW_BG = '#191934', '#4a3b10'
 TEXT, MUTED, ACCENT, GOLD = '#e6e6f0', '#8a8aa8', '#38bdf8', '#fbbf24'
 TONE = {'up': '#22c55e', 'down': '#ef4444', 'flat': '#eab308', 'muted': MUTED, 'sym': ACCENT, '': TEXT}
 FILTERED = '#f87171'
+SECTION = '#22224a'     # nền dòng tên tiêu chí
 
 EXCHANGE_LABEL = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom', 'ALL': 'Cả 3 sàn'}
 OP_LABEL = [('gt', 'Lớn hơn (>)'), ('lt', 'Nhỏ hơn (<)'), ('eq', 'Bằng (=)')]
@@ -215,6 +216,8 @@ class App:
         self.cfg = {**DEFAULT_CONFIG, **saved}
         if 'alert' not in saved and saved.get('sound') is False:   # cài đặt cũ: đã tắt tiếng
             self.cfg['alert'] = 'off'
+        # Nhiều tiêu chí lọc; cài đặt cũ (1 bộ lọc) tự thành "Tiêu chí 1"
+        self.cfg['criteria'] = core.criteria_from_config(self.cfg)
         self.speaker = None          # tiến trình đang đọc to
         self.pending_say = []        # mã mới đến lúc đang đọc dở → đọc tiếp sau
         self.hist = load_json(HIST_PATH, {})
@@ -223,10 +226,10 @@ class App:
         self.error = None
         self.hist_progress = 1.0 if self.hist.get('day') == core.vn_date(time.time()) else 0.0
         self.stat_note = None   # lý do không dùng được FireAnt cho cột MA (vd cookie hết hạn)
-        self.prev_symbols = None
-        self.prev_key = None
+        self.prev_by_key = None      # {khoá tiêu chí: tập mã lượt trước} — để biết mã nào MỚI lọt lọc
         self.new_until = {}
-        self.matches = []
+        self.sections = []           # [(tiêu chí, [mã khớp])] — chỉ tiêu chí đã có điều kiện
+        self.matches = []            # gộp mọi khối, không trùng mã
         self.offset = 0
         self.q = queue.Queue()
         self.wake = threading.Event()
@@ -312,17 +315,24 @@ class App:
         m.add_command(label='Cài đặt bộ lọc…', command=self.open_settings)
         m.add_command(label='Về góc dưới-phải màn hình', command=self.reset_position)
         m.add_separator()
-        # Đổi sàn nhanh, khỏi mở Cài đặt
-        self.exchange_var = tk.StringVar(value=self.cfg['exchange'])
-        for key in ('HSX', 'HNX', 'UPCOM', 'ALL'):
-            m.add_radiobutton(label='Sàn: ' + EXCHANGE_LABEL[key], value=key, variable=self.exchange_var,
-                              command=lambda k=key: self.apply_settings({'exchange': k}))
-        m.add_separator()
+        crits = self.cfg['criteria']
+        if len(crits) == 1:
+            # Đổi sàn nhanh, khỏi mở Cài đặt (nhiều tiêu chí thì mỗi cái một sàn → đổi trong Cài đặt)
+            self.exchange_var = tk.StringVar(value=crits[0]['exchange'])
+            for key in ('HSX', 'HNX', 'UPCOM', 'ALL'):
+                m.add_radiobutton(label='Sàn: ' + EXCHANGE_LABEL[key], value=key, variable=self.exchange_var,
+                                  command=lambda k=key: self.set_exchange(k))
+            m.add_separator()
         if FROZEN:
             m.add_command(label=f'Kiểm tra cập nhật (đang dùng v{APP_VERSION})', command=self.check_update_now)
             m.add_command(label='Gỡ khỏi máy…', command=self.uninstall)
         m.add_command(label='Tắt chương trình', command=self.quit)
         self.menu = m
+
+    def set_exchange(self, key):
+        crits = [dict(c) for c in self.cfg['criteria']]
+        crits[0]['exchange'] = key
+        self.apply_settings({'criteria': crits})
 
     def hide_from_taskbar(self):
         """Kiểu cửa sổ công cụ: không có nút dưới taskbar, không hiện trong Alt+Tab."""
@@ -338,42 +348,57 @@ class App:
     def show_menu(self, e):
         self.menu.tk_popup(e.x_root, e.y_root)
 
-    def config_key(self):
-        c = self.cfg
-        return json.dumps([c['exchange'], c['filters'], c['sortColumn'], c['sortDirection']], sort_keys=True)
-
     def compute(self):
-        """Lọc lại từ giá mới nhất + lịch sử; đánh dấu mã mới lọt lọc."""
+        """Lọc lại từ giá mới nhất + lịch sử cho từng tiêu chí; đánh dấu mã mới lọt lọc."""
         if self.quotes is None:
             return
         data = self.hist.get('data', {})
         rows = [core.transform_quote(q, data.get(q.get('Symbol'))) for q in self.quotes]
         all_stocks = core.group_by_exchange(rows)
-        has_filter = bool(core.active_filter_keys(self.cfg['filters']))
-        self.matches = core.select_matches(all_stocks, self.cfg) if has_filter else []
+        sort = {'sortColumn': self.cfg.get('sortColumn'), 'sortDirection': self.cfg.get('sortDirection')}
 
-        key = self.config_key()
-        syms = {s['symbol'] for s in self.matches}
-        if has_filter and self.prev_symbols is not None and self.prev_key == key:
-            fresh = syms - self.prev_symbols
-            if fresh:
+        self.sections, seen, flat = [], set(), []
+        for c in self.cfg['criteria']:
+            if not core.active_filter_keys(c['filters']):
+                continue
+            m = core.select_matches(all_stocks, {**c, **sort})
+            self.sections.append((c, m))
+            for st in m:
+                if st['symbol'] not in seen:
+                    seen.add(st['symbol'])
+                    flat.append(st)
+        self.matches = flat
+
+        now_by_key = {core.criterion_key(c): {st['symbol'] for st in m} for c, m in self.sections}
+        if self.prev_by_key is not None:
+            groups = []
+            for c, m in self.sections:
+                before = self.prev_by_key.get(core.criterion_key(c))
+                if before is None:          # tiêu chí vừa thêm / vừa sửa → chưa có gì để so
+                    continue
+                fresh = [st['symbol'] for st in m if st['symbol'] not in before]
+                if fresh:
+                    groups.append((c['name'], fresh))
+            if groups:
                 until = time.time() + NEW_HIGHLIGHT_SEC
-                for s in fresh:
-                    self.new_until[s] = until
-                # Theo thứ tự đang hiện trên bảng (GTGD lớn trước)
-                self.alert([s['symbol'] for s in self.matches if s['symbol'] in fresh])
+                for _, syms in groups:
+                    for sym in syms:
+                        self.new_until[sym] = until
+                self.alert(groups)
                 self.root.after(int(NEW_HIGHLIGHT_SEC * 1000) + 100, self.render)
-        self.prev_symbols, self.prev_key = syms, key
+        self.prev_by_key = now_by_key
 
-    def alert(self, symbols, mode=None):
+    def alert(self, groups, mode=None):
+        """groups = [(tên tiêu chí, [mã mới…])]."""
         mode = mode or self.cfg.get('alert', 'speak')
-        if mode == 'off' or not symbols:
+        groups = [(n, list(syms)) for n, syms in groups if syms]
+        if mode == 'off' or not groups:
             return
         if mode == 'speak':
             if self.speaker and self.speaker.poll() is None:
-                self.pending_say += [s for s in symbols if s not in self.pending_say]
+                self.pending_say += groups
                 return
-            vi, en = core.alert_text(symbols)
+            vi, en = core.alert_text_groups(groups)
             try:
                 self.speaker = subprocess.Popen(
                     ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_PS],
@@ -389,19 +414,36 @@ class App:
             pass
 
     def say_pending(self):
-        """Đọc nốt những mã mới đến trong lúc đang đọc dở."""
+        """Đọc nốt những mã mới đến trong lúc đang đọc dở (gộp theo tiêu chí, bỏ mã trùng)."""
         if self.pending_say and not (self.speaker and self.speaker.poll() is None):
-            syms, self.pending_say = self.pending_say, []
-            self.alert(syms)
+            merged = {}
+            for name, syms in self.pending_say:
+                lst = merged.setdefault(name, [])
+                lst += [x for x in syms if x not in lst]
+            self.pending_say = []
+            self.alert(list(merged.items()))
+
+    def ma_source_note(self):
+        if self.hist_progress < 1:
+            return f'đang tính MA {int(self.hist_progress * 100)}%'
+        if self.hist.get('source') == 'fireant':
+            return 'MA: FireAnt'
+        return 'MA: tự tính từ VNDirect' + (f' ({self.stat_note})' if self.stat_note else '')
 
     def render(self):
         cfg = self.cfg
-        filters = cfg['filters']
-        has_filter = bool(core.active_filter_keys(filters))
         full = cfg['mode'] == 'full'
+        crits = cfg['criteria']
+        sections = self.sections if self.quotes is not None else []
+        multi = len([c for c in crits if core.active_filter_keys(c['filters'])]) > 1
+        has_filter = any(core.active_filter_keys(c['filters']) for c in crits)
 
-        # Dòng trạng thái: sàn · số mã · giờ cập nhật
-        parts = [EXCHANGE_LABEL.get(cfg['exchange'], cfg['exchange'])]
+        # Dòng trạng thái: sàn (hoặc số tiêu chí) · số mã · giờ cập nhật
+        if multi:
+            parts = [f'{len(sections) or len(crits)} tiêu chí']
+        else:
+            first = next((c for c in crits if core.active_filter_keys(c['filters'])), crits[0])
+            parts = [EXCHANGE_LABEL.get(first['exchange'], first['exchange'])]
         if has_filter and self.quotes is not None:
             parts.append(f'{len(self.matches)} mã')
         if self.fetched_at:
@@ -410,55 +452,33 @@ class App:
                                and time.time() - self.fetched_at > STALE_SEC)
         self.meta.config(text=' · '.join(parts), fg='#eab308' if stale else MUTED)
 
-        # Dòng bộ lọc (chỉ ở chế độ đầy đủ)
+        # Dòng dưới thanh tiêu đề (chế độ đầy đủ): 1 tiêu chí → mô tả lọc + nguồn MA; nhiều → chỉ nguồn MA
         if full and has_filter:
-            if self.hist_progress < 1:
-                src = f'đang tính MA {int(self.hist_progress * 100)}%'
-            elif self.hist.get('source') == 'fireant':
-                src = 'MA: FireAnt'
-            else:
-                src = 'MA: tự tính từ VNDirect' + (f' ({self.stat_note})' if self.stat_note else '')
-            self.filters_lbl.config(text=core.describe_filters(filters) + '   ·   ' + src)
+            text = self.ma_source_note()
+            if not multi and sections:
+                text = core.describe_filters(sections[0][0]['filters']) + '   ·   ' + text
+            self.filters_lbl.config(text=text)
             self.filters_lbl.pack(fill='x', padx=8, pady=(3, 1), after=self.frame.winfo_children()[0])
         else:
             self.filters_lbl.pack_forget()
 
-        # Bảng
+        # Bảng: mỗi tiêu chí một khối
         for w in self.table.winfo_children():
             w.destroy()
-        rows = self.matches if has_filter else []
-        self.offset = max(0, min(self.offset, max(0, len(rows) - MAX_ROWS)))
-        visible = rows[self.offset:self.offset + MAX_ROWS]
-        if visible:
-            cols = core.table_columns(cfg, full)
-            active = set(core.active_filter_keys(filters))
-            sort_col, sort_dir = cfg.get('sortColumn'), cfg.get('sortDirection')
-            for ci, (key, label) in enumerate(cols):
-                arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
-                txt = core.HEAD_LABEL.get(key, label).upper() + (' •' if key in active else '') + arrow
-                fg = FILTERED if key in active else (TEXT if key == sort_col else MUTED)
-                lbl = tk.Label(self.table, text=txt, bg=BG, fg=fg,
-                               font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
-                lbl.grid(row=0, column=ci, sticky='ew', pady=(3, 2))
-                # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ)
-                lbl.bind('<Button-1>', lambda e, k=key: self.sort_by(k))
-                lbl.bind('<MouseWheel>', self.on_wheel)
-                lbl.bind('<Button-3>', self.show_menu)
-            now = time.time()
-            for ri, s in enumerate(visible, 1):
-                bg = NEW_BG if self.new_until.get(s['symbol'], 0) > now else (ALT if ri % 2 == 0 else BG)
-                for ci, (key, _) in enumerate(cols):
-                    text, tone = core.format_cell(s, key)
-                    lbl = tk.Label(self.table, text=text, bg=bg, fg=TONE.get(tone, TEXT),
-                                   font=FONT_BOLD if key == 'symbol' else FONT,
-                                   anchor='w' if ci == 0 else 'e', padx=8)
-                    lbl.grid(row=ri, column=ci, sticky='ew')
-                    self._bind_table(lbl)
-            tk.Frame(self.table, bg=BG, height=4).grid(row=len(visible) + 1, column=0)
-            # Cột cuối giãn ra cho kín bề ngang khi thanh tiêu đề rộng hơn bảng
-            for ci in range(len(core.COLUMNS)):
-                self.table.grid_columnconfigure(ci, weight=1 if ci == len(cols) - 1 else 0)
-        hidden = len(rows) - len(visible)
+        total = sum(len(m) for _, m in sections)
+        self.total_rows = total
+        self.offset = max(0, min(self.offset, max(0, total - MAX_ROWS)))
+        lo, hi = self.offset, self.offset + MAX_ROWS
+        idx = 0
+        shown = 0
+        for c, m in sections:
+            vis = [st for i, st in enumerate(m, idx) if lo <= i < hi]
+            idx += len(m)
+            if m and not vis:
+                continue                    # khối đã lăn qua hết
+            self._render_section(c, m, vis, full, multi)
+            shown += len(vis)
+        hidden = total - shown
         if hidden > 0:
             self.more_lbl.config(text=f'lăn chuột để xem thêm {hidden} mã')
             self.more_lbl.pack(after=self.table, pady=(0, 3))
@@ -472,7 +492,7 @@ class App:
             msg, color = f'{self.error}. Sẽ tự thử lại — kiểm tra mạng Internet.', '#fca5a5'
         elif not has_filter:
             msg, color = 'Chưa có bộ lọc. Bấm ⚙ để đặt lọc\n(vd Giá < 20, % Thay đổi > 2).', MUTED
-        elif not rows:
+        elif not multi and total == 0:
             msg, color = 'Chưa có mã nào khớp bộ lọc.', MUTED
         else:
             msg, color = '', MUTED
@@ -483,6 +503,60 @@ class App:
             self.msg.pack_forget()
 
         self.fit()
+
+    def _render_section(self, c, matches, visible, full, multi):
+        box = tk.Frame(self.table, bg=BG)
+        box.pack(fill='x')
+        for w in (box,):
+            w.bind('<MouseWheel>', self.on_wheel)
+            w.bind('<Button-3>', self.show_menu)
+        if multi:
+            ex = EXCHANGE_LABEL.get(c['exchange'], c['exchange'])
+            title = tk.Label(box, text=f'{c["name"]}  ·  {ex}  ·  {len(matches)} mã', bg=SECTION, fg=GOLD,
+                             font=('Segoe UI', 8, 'bold'), anchor='w', padx=8)
+            title.pack(fill='x', pady=(2, 0))
+            self._bind_table(title)
+            if full:
+                d = tk.Label(box, text=core.describe_filters(c['filters']), bg=BG, fg=MUTED, font=FONT_SMALL,
+                             anchor='w', padx=8)
+                d.pack(fill='x')
+                self._bind_table(d)
+        if not matches:
+            e = tk.Label(box, text='chưa có mã nào khớp', bg=BG, fg=MUTED, font=FONT_SMALL, anchor='w', padx=8)
+            e.pack(fill='x', pady=(1, 3))
+            self._bind_table(e)
+            return
+        grid = tk.Frame(box, bg=BG)
+        grid.pack(fill='x')
+        grid.bind('<MouseWheel>', self.on_wheel)
+        cols = core.table_columns(c, full)
+        active = set(core.active_filter_keys(c['filters']))
+        sort_col, sort_dir = self.cfg.get('sortColumn'), self.cfg.get('sortDirection')
+        for ci, (key, label) in enumerate(cols):
+            arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
+            txt = core.HEAD_LABEL.get(key, label).upper() + (' •' if key in active else '') + arrow
+            fg = FILTERED if key in active else (TEXT if key == sort_col else MUTED)
+            lbl = tk.Label(grid, text=txt, bg=BG, fg=fg,
+                           font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
+            lbl.grid(row=0, column=ci, sticky='ew', pady=(3, 2))
+            # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ)
+            lbl.bind('<Button-1>', lambda e, k=key: self.sort_by(k))
+            lbl.bind('<MouseWheel>', self.on_wheel)
+            lbl.bind('<Button-3>', self.show_menu)
+        now = time.time()
+        for ri, st in enumerate(visible, 1):
+            bg = NEW_BG if self.new_until.get(st['symbol'], 0) > now else (ALT if ri % 2 == 0 else BG)
+            for ci, (key, _) in enumerate(cols):
+                text, tone = core.format_cell(st, key)
+                lbl = tk.Label(grid, text=text, bg=bg, fg=TONE.get(tone, TEXT),
+                               font=FONT_BOLD if key == 'symbol' else FONT,
+                               anchor='w' if ci == 0 else 'e', padx=8)
+                lbl.grid(row=ri, column=ci, sticky='ew')
+                self._bind_table(lbl)
+        tk.Frame(grid, bg=BG, height=4).grid(row=len(visible) + 1, column=0)
+        # Cột cuối giãn ra cho kín bề ngang khi khối khác / thanh tiêu đề rộng hơn
+        for ci in range(len(cols)):
+            grid.grid_columnconfigure(ci, weight=1 if ci == len(cols) - 1 else 0)
 
     def _bind_table(self, w):
         w.bind('<Button-1>', lambda e: self.toggle_mode())
@@ -521,7 +595,7 @@ class App:
         self.render()
 
     def on_wheel(self, e):
-        if len(self.matches) <= MAX_ROWS:
+        if getattr(self, 'total_rows', 0) <= MAX_ROWS:
             return
         self.offset += -3 if e.delta > 0 else 3
         self.render()
@@ -588,7 +662,8 @@ class App:
 
     def apply_settings(self, new_cfg):
         self.cfg.update(new_cfg)
-        self.exchange_var.set(self.cfg['exchange'])
+        self.cfg['criteria'] = core.criteria_from_config(self.cfg)
+        self._build_menu()            # số tiêu chí đổi → menu đổi sàn nhanh có/không
         self.root.attributes('-alpha', self.cfg.get('opacity', 1.0))
         save_json(CONFIG_PATH, self.cfg)
         self.offset = 0
@@ -822,32 +897,46 @@ class SettingsWindow:
         body = ttk.Frame(w, padding=14)
         body.pack(fill='both')
 
+        # Bản nháp các tiêu chí — sửa thoải mái, bấm Lưu mới áp dụng
+        self.crits = [dict(c, filters=dict(c['filters'])) for c in cfg['criteria']]
+        self.cur = 0
+
         ttk.Label(body, text='Bộ lọc', font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, columnspan=3, sticky='w')
-        ttk.Label(body, text='Để trống ô giá trị = không lọc cột đó. Giá tính bằng nghìn đồng (14.2 = 14.200đ),\n'
-                             'KLGD bằng cổ phiếu (1000000 = 1 triệu CP), GTGD bằng tỷ đồng.',
+        ttk.Label(body, text='Mỗi tiêu chí gồm nhiều điều kiện (phải thoả TẤT CẢ). Có nhiều tiêu chí thì bảng giá\n'
+                             'hiện mỗi tiêu chí một khối. Để trống ô giá trị = không lọc cột đó.\n'
+                             'Giá bằng nghìn đồng (14.2 = 14.200đ), KLGD bằng cổ phiếu, GTGD bằng tỷ đồng.',
                   foreground='#666').grid(row=1, column=0, columnspan=3, sticky='w', pady=(2, 8))
 
-        ttk.Label(body, text='Sàn').grid(row=2, column=0, sticky='w', pady=2)
+        pick = ttk.Frame(body)
+        pick.grid(row=2, column=0, columnspan=3, sticky='w', pady=(0, 6))
+        ttk.Label(pick, text='Tiêu chí').pack(side='left')
+        self.crit_box = ttk.Combobox(pick, state='readonly', width=22)
+        self.crit_box.pack(side='left', padx=6)
+        self.crit_box.bind('<<ComboboxSelected>>', lambda e: self.switch(self.crit_box.current()))
+        ttk.Button(pick, text='＋ Thêm tiêu chí', command=self.add_criterion).pack(side='left', padx=(4, 0))
+        ttk.Button(pick, text='Xoá', command=self.delete_criterion).pack(side='left', padx=4)
+
+        ttk.Label(body, text='Tên').grid(row=3, column=0, sticky='w', pady=2)
+        self.crit_name = ttk.Entry(body, width=30)
+        self.crit_name.grid(row=3, column=1, columnspan=2, sticky='w', pady=2)
+
+        ttk.Label(body, text='Sàn').grid(row=4, column=0, sticky='w', pady=2)
         self.exchange = ttk.Combobox(body, state='readonly', width=16,
                                      values=[EXCHANGE_LABEL[k] for k in ('HSX', 'HNX', 'UPCOM', 'ALL')])
-        self.exchange.set(EXCHANGE_LABEL.get(cfg['exchange'], 'HSX'))
-        self.exchange.grid(row=2, column=1, sticky='w', pady=2)
+        self.exchange.grid(row=4, column=1, sticky='w', pady=2)
 
         self.rows = {}
         op_names = [n for _, n in OP_LABEL]
-        for i, (key, label) in enumerate(core.FILTERABLE, start=3):
-            f = cfg['filters'].get(key) or {}
+        for i, (key, label) in enumerate(core.FILTERABLE, start=5):
             ttk.Label(body, text=label).grid(row=i, column=0, sticky='w', pady=2)
             op = ttk.Combobox(body, state='readonly', width=16, values=op_names)
-            op.set(dict(OP_LABEL).get(f.get('operator', 'gt'), op_names[0]))
             op.grid(row=i, column=1, sticky='w', padx=(0, 8), pady=2)
             val = ttk.Entry(body, width=14)
-            if f.get('value') not in (None, ''):
-                val.insert(0, core.js_num(f['value']))
             val.grid(row=i, column=2, sticky='w', pady=2)
             self.rows[key] = (op, val)
+        self.load_form()
 
-        r = 3 + len(core.FILTERABLE)
+        r = 5 + len(core.FILTERABLE)
         ttk.Separator(body).grid(row=r, column=0, columnspan=3, sticky='ew', pady=10)
         ttk.Label(body, text='Sắp xếp theo').grid(row=r + 1, column=0, sticky='w', pady=2)
         self.sort_col = ttk.Combobox(body, state='readonly', width=16, values=[l for _, l in core.COLUMNS])
@@ -901,11 +990,29 @@ class SettingsWindow:
         return {n: k for k, n in ALERT_LABEL}.get(self.alert.get(), 'speak')
 
     def test_alert(self):
-        # Đọc thử 2 mã đầu đang khớp lọc, chưa có thì lấy mã mẫu
-        sample = [s['symbol'] for s in self.app.matches[:2]] or ['VIB', 'MBB']
-        self.app.alert(sample, mode=self.alert_mode())
+        # Đọc thử vài mã đầu đang khớp ở từng khối, chưa có thì lấy mã mẫu
+        groups = [(c['name'], [st['symbol'] for st in m[:2]]) for c, m in self.app.sections]
+        groups = [g for g in groups if g[1]] or [('Tiêu chí 1', ['VIB', 'MBB'])]
+        self.app.alert(groups, mode=self.alert_mode())
 
-    def save(self):
+    # ── Bản nháp tiêu chí ──
+    def load_form(self):
+        c = self.crits[self.cur]
+        self.crit_box['values'] = [x['name'] for x in self.crits]
+        self.crit_box.current(self.cur)
+        self.crit_name.delete(0, 'end')
+        self.crit_name.insert(0, c['name'])
+        self.exchange.set(EXCHANGE_LABEL.get(c['exchange'], 'HSX'))
+        op_label = dict(OP_LABEL)
+        for key, (op, val) in self.rows.items():
+            f = c['filters'].get(key) or {}
+            op.set(op_label.get(f.get('operator', 'gt'), OP_LABEL[0][1]))
+            val.delete(0, 'end')
+            if f.get('value') not in (None, ''):
+                val.insert(0, core.js_num(f['value']))
+
+    def store_form(self):
+        """Ghi ô đang sửa vào bản nháp. Trả False (và báo) nếu có ô không phải số."""
         name_to_op = {n: k for k, n in OP_LABEL}
         filters, bad = {}, []
         for key, (op, val) in self.rows.items():
@@ -918,17 +1025,56 @@ class SettingsWindow:
                 bad.append(core.LABEL[key])
         if bad:
             messagebox.showwarning(APP_NAME, 'Giá trị không phải số: ' + ', '.join(bad), parent=self.win)
+            return False
+        label_to_ex = {v: k for k, v in EXCHANGE_LABEL.items()}
+        self.crits[self.cur] = {'name': self.crit_name.get().strip() or f'Tiêu chí {self.cur + 1}',
+                                'exchange': label_to_ex.get(self.exchange.get(), 'HSX'),
+                                'filters': filters}
+        return True
+
+    def switch(self, i):
+        if i == self.cur:
             return
+        if not self.store_form():
+            self.crit_box.current(self.cur)
+            return
+        self.cur = i
+        self.load_form()
+
+    def add_criterion(self):
+        if not self.store_form():
+            return
+        n = len(self.crits) + 1
+        self.crits.append({'name': f'Tiêu chí {n}', 'exchange': self.crits[self.cur]['exchange'], 'filters': {}})
+        self.cur = len(self.crits) - 1
+        self.load_form()
+        self.crit_name.focus_set()
+        self.crit_name.select_range(0, 'end')
+
+    def delete_criterion(self):
+        if len(self.crits) == 1:
+            messagebox.showinfo(APP_NAME, 'Phải còn ít nhất 1 tiêu chí. Muốn tắt lọc thì xoá trống các ô giá trị.',
+                                parent=self.win)
+            return
+        name = self.crits[self.cur]['name']
+        if not messagebox.askyesno(APP_NAME, f'Xoá tiêu chí "{name}"?', parent=self.win):
+            return
+        del self.crits[self.cur]
+        self.cur = max(0, self.cur - 1)
+        self.load_form()
+
+    def save(self):
+        if not self.store_form():
+            return
+        self.load_form()                 # cập nhật tên mới trong ô chọn
         sheet_raw = self.sheet.get().strip()
         sheet = core.sheet_id_from(sheet_raw)
         if sheet_raw and not sheet:
             messagebox.showwarning(APP_NAME, 'Không nhận ra link Google Sheet.', parent=self.win)
             return
-        label_to_ex = {v: k for k, v in EXCHANGE_LABEL.items()}
         label_to_col = {l: k for k, l in core.COLUMNS}
         self.app.apply_settings({
-            'exchange': label_to_ex.get(self.exchange.get(), 'HSX'),
-            'filters': filters,
+            'criteria': [dict(c, filters=dict(c['filters'])) for c in self.crits],
             'sortColumn': label_to_col.get(self.sort_col.get(), 'value'),
             'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc',
             'alert': self.alert_mode(),

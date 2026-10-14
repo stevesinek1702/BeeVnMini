@@ -385,6 +385,44 @@ def parse_update(info, current):
             'notes': str(info.get('notes') or '')}
 
 
+def criteria_from_config(cfg):
+    """Danh sách tiêu chí lọc. Cài đặt cũ (1 bộ lọc ở exchange/filters) tự thành "Tiêu chí 1"."""
+    out = []
+    for i, c in enumerate(cfg.get('criteria') or [], 1):
+        if isinstance(c, dict):
+            out.append({'name': (str(c.get('name') or '').strip() or f'Tiêu chí {i}'),
+                        'exchange': c.get('exchange') or 'HSX',
+                        'filters': dict(c.get('filters') or {})})
+    if not out:
+        out = [{'name': 'Tiêu chí 1', 'exchange': cfg.get('exchange') or 'HSX',
+                'filters': dict(cfg.get('filters') or {})}]
+    return out
+
+
+def criterion_key(c):
+    """Nhận diện 1 tiêu chí theo nội dung (đổi tên không tính là đổi lọc → không báo "mã mới" giả)."""
+    return json.dumps([c.get('exchange'), c.get('filters')], sort_keys=True)
+
+
+def alert_text_groups(groups, limit=6):
+    """Câu đọc khi có mã mới ở nhiều tiêu chí: [(tên, [mã…]), …] → (tiếng Việt, tiếng Anh).
+    Chỉ 1 tiêu chí thì đọc gọn "Mã mới: …" như trước."""
+    groups = [(n, list(s)) for n, s in groups if s]
+    if len(groups) <= 1:
+        return alert_text(groups[0][1] if groups else [], limit=5)
+    vi, en, used, rest = [], [], 0, 0
+    for name, syms in groups:
+        take = syms[:max(0, limit - used)]
+        used += len(take)
+        rest += len(syms) - len(take)
+        if take:
+            vi.append(f'{name}: ' + ', '.join(spell(x) for x in take))
+            en.append(f'{name}: ' + ', '.join(spell(x) for x in take))
+    tail_vi = f'. Và {rest} mã khác' if rest else ''
+    tail_en = f'. And {rest} more' if rest else ''
+    return '. '.join(vi) + tail_vi + '.', '. '.join(en) + tail_en + '.'
+
+
 EXCHANGE_COL = ('exchange', 'Sàn')
 EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
 

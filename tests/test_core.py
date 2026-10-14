@@ -106,6 +106,25 @@ class LocGiongWeb(unittest.TestCase):
         self.assertIsNone(core.parse_update({**good, 'sha256': 'abc'}, '1.0'))    # thiếu mã kiểm tra → bỏ
         self.assertIsNone(core.parse_update(None, '1.0'))
 
+    def test_nhieu_tieu_chi(self):
+        # Cài đặt cũ → Tiêu chí 1
+        old = core.criteria_from_config({'exchange': 'ALL', 'filters': FILTERS})
+        self.assertEqual(old, [{'name': 'Tiêu chí 1', 'exchange': 'ALL', 'filters': FILTERS}])
+        new = core.criteria_from_config({'criteria': [{'name': 'Đột biến KL', 'exchange': 'HSX', 'filters': {}},
+                                                      {'name': '  ', 'filters': FILTERS}]})
+        self.assertEqual([c['name'] for c in new], ['Đột biến KL', 'Tiêu chí 2'])
+        self.assertEqual(new[1]['exchange'], 'HSX')
+        # Đổi tên không đổi khoá
+        self.assertEqual(core.criterion_key({**new[0], 'name': 'X'}), core.criterion_key(new[0]))
+        self.assertNotEqual(core.criterion_key(new[0]), core.criterion_key(new[1]))
+
+    def test_cau_doc_nhieu_tieu_chi(self):
+        self.assertEqual(core.alert_text_groups([('A', ['VIB'])])[0], 'Mã mới: V I B.')
+        vi, _ = core.alert_text_groups([('Đột biến KL', ['HHP', 'VEA']), ('Vượt MA20', ['MBB']), ('Trống', [])])
+        self.assertEqual(vi, 'Đột biến KL: H H P, V E A. Vượt MA20: M B B.')
+        vi, _ = core.alert_text_groups([('A', list('ABCDE')), ('B', list('FGHI'))])
+        self.assertEqual(vi, 'A: A, B, C, D, E. B: F. Và 3 mã khác.')
+
     def test_mo_ta_bo_loc(self):
         self.assertEqual(core.describe_filters(FILTERS), 'Giá < 20 · % Thay đổi > 2 · KLGD > 1000000')
 

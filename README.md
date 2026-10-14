@@ -3,6 +3,7 @@
 Chương trình nhỏ cho Windows (không phải extension). Cửa sổ bảng giá **luôn nằm trên mọi cửa sổ**:
 chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 
+- **Nhiều tiêu chí**, mỗi tiêu chí nhiều điều kiện (phải thoả tất cả) và sàn riêng — mỗi tiêu chí một khối.
 - **1 mã = 1 hàng.** Nhiều mã thì cửa sổ dài thêm lên trên, giống chồng thông báo.
 - **Thu gọn:** chỉ *Mã CP* + các cột đang lọc (cột có chấm đỏ). **Bấm vào bảng** → đủ 11 cột như bảng giá Bee.vn.
 - Tự lấy giá **30 giây/lần** trong giờ giao dịch (8:45–15:15, thứ 2–6), ngoài giờ 10 phút/lần.
@@ -30,6 +31,7 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 | Muốn | Làm |
 |---|---|
 | Đặt / đổi bộ lọc, đổi sàn | Bấm **⚙** |
+| Thêm tiêu chí thứ 2, 3… | **⚙** → **＋ Thêm tiêu chí** → đặt tên + sàn + điều kiện → **Lưu**. Bảng giá hiện mỗi tiêu chí một khối (tên · sàn · số mã); đổi qua lại bằng ô *Tiêu chí*, bỏ bằng nút **Xoá** |
 | Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP / Sàn xếp A → Z |
 | Xem đủ cột / thu gọn | Bấm vào các hàng mã (hoặc nút ⤢) |
 | Dời chỗ (kể cả sang màn hình khác) | Giữ chuột vào thanh trên cùng (chỗ chữ Bee.vn) rồi kéo — lần sau mở lại đúng chỗ đó |
