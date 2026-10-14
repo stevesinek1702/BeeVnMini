@@ -385,17 +385,26 @@ def parse_update(info, current):
             'notes': str(info.get('notes') or '')}
 
 
+ALERT_MODES = ('speak', 'beep', 'off')   # đọc tên mã | kêu "ting" | im lặng
+
+
 def criteria_from_config(cfg):
-    """Danh sách tiêu chí lọc. Cài đặt cũ (1 bộ lọc ở exchange/filters) tự thành "Tiêu chí 1"."""
+    """Danh sách tiêu chí lọc. Cài đặt cũ (1 bộ lọc ở exchange/filters) tự thành "Tiêu chí 1".
+    Mỗi tiêu chí có kiểu báo mã mới riêng; thiếu thì lấy kiểu báo chung cũ (mặc định đọc tên mã)."""
+    default_alert = cfg.get('alert') if cfg.get('alert') in ALERT_MODES else 'speak'
+
+    def alert_of(c):
+        return c.get('alert') if c.get('alert') in ALERT_MODES else default_alert
     out = []
     for i, c in enumerate(cfg.get('criteria') or [], 1):
         if isinstance(c, dict):
             out.append({'name': (str(c.get('name') or '').strip() or f'Tiêu chí {i}'),
                         'exchange': c.get('exchange') or 'HSX',
-                        'filters': dict(c.get('filters') or {})})
+                        'filters': dict(c.get('filters') or {}),
+                        'alert': alert_of(c)})
     if not out:
         out = [{'name': 'Tiêu chí 1', 'exchange': cfg.get('exchange') or 'HSX',
-                'filters': dict(cfg.get('filters') or {})}]
+                'filters': dict(cfg.get('filters') or {}), 'alert': default_alert}]
     return out
 
 
@@ -404,12 +413,15 @@ def criterion_key(c):
     return json.dumps([c.get('exchange'), c.get('filters')], sort_keys=True)
 
 
-def alert_text_groups(groups, limit=6):
-    """Câu đọc khi có mã mới ở nhiều tiêu chí: [(tên, [mã…]), …] → (tiếng Việt, tiếng Anh).
-    Chỉ 1 tiêu chí thì đọc gọn "Mã mới: …" như trước."""
+def alert_text_groups(groups, limit=6, names=None):
+    """Câu đọc khi có mã mới: [(tên tiêu chí, [mã…]), …] → (tiếng Việt, tiếng Anh).
+    names=True: luôn đọc kèm tên tiêu chí (khi anh đặt nhiều tiêu chí, để biết mã lọt tiêu chí nào).
+    Mặc định: chỉ đọc tên khi có từ 2 nhóm; 1 nhóm thì đọc gọn "Mã mới: …"."""
     groups = [(n, list(s)) for n, s in groups if s]
-    if len(groups) <= 1:
-        return alert_text(groups[0][1] if groups else [], limit=5)
+    if names is None:
+        names = len(groups) > 1
+    if not names:
+        return alert_text([x for _, s in groups for x in s], limit=5)
     vi, en, used, rest = [], [], 0, 0
     for name, syms in groups:
         take = syms[:max(0, limit - used)]

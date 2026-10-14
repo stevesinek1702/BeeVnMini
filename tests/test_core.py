@@ -109,7 +109,13 @@ class LocGiongWeb(unittest.TestCase):
     def test_nhieu_tieu_chi(self):
         # Cài đặt cũ → Tiêu chí 1
         old = core.criteria_from_config({'exchange': 'ALL', 'filters': FILTERS})
-        self.assertEqual(old, [{'name': 'Tiêu chí 1', 'exchange': 'ALL', 'filters': FILTERS}])
+        self.assertEqual(old, [{'name': 'Tiêu chí 1', 'exchange': 'ALL', 'filters': FILTERS, 'alert': 'speak'}])
+        # Kiểu báo: tiêu chí có riêng thì dùng riêng, không thì theo kiểu chung cũ
+        mixed = core.criteria_from_config({'alert': 'off', 'criteria': [{'name': 'A', 'alert': 'beep'}, {'name': 'B'},
+                                                                         {'name': 'C', 'alert': 'lung tung'}]})
+        self.assertEqual([c['alert'] for c in mixed], ['beep', 'off', 'off'])
+        # Đổi kiểu báo không tính là đổi lọc
+        self.assertEqual(core.criterion_key(mixed[0]), core.criterion_key({**mixed[0], 'alert': 'speak'}))
         new = core.criteria_from_config({'criteria': [{'name': 'Đột biến KL', 'exchange': 'HSX', 'filters': {}},
                                                       {'name': '  ', 'filters': FILTERS}]})
         self.assertEqual([c['name'] for c in new], ['Đột biến KL', 'Tiêu chí 2'])
@@ -120,6 +126,8 @@ class LocGiongWeb(unittest.TestCase):
 
     def test_cau_doc_nhieu_tieu_chi(self):
         self.assertEqual(core.alert_text_groups([('A', ['VIB'])])[0], 'Mã mới: V I B.')
+        # Nhiều tiêu chí mà chỉ 1 cái có mã mới → vẫn đọc tên tiêu chí
+        self.assertEqual(core.alert_text_groups([('bùng nổ KL', ['HHP'])], names=True)[0], 'bùng nổ KL: H H P.')
         vi, _ = core.alert_text_groups([('Đột biến KL', ['HHP', 'VEA']), ('Vượt MA20', ['MBB']), ('Trống', [])])
         self.assertEqual(vi, 'Đột biến KL: H H P, V E A. Vượt MA20: M B B.')
         vi, _ = core.alert_text_groups([('A', list('ABCDE')), ('B', list('FGHI'))])

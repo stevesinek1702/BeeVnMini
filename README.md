@@ -8,7 +8,8 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 - **Thu gọn:** chỉ *Mã CP* + các cột đang lọc (cột có chấm đỏ). **Bấm vào bảng** → đủ 11 cột như bảng giá Bee.vn.
 - Tự lấy giá **30 giây/lần** trong giờ giao dịch (8:45–15:15, thứ 2–6), ngoài giờ 10 phút/lần.
 - Có **mã mới** lọt vào bộ lọc → hàng đó sáng vàng vài giây + **đọc to tên mã** bằng giọng tiếng Việt
-  của Windows ("Mã mới: V I B, M B B"). Đổi sang kêu "ting" hoặc im lặng trong ⚙ (có nút *Nghe thử*).
+  của Windows ("bùng nổ KL: V I B, M B B"). **Mỗi tiêu chí chọn riêng**: đọc tên mã / kêu "ting" /
+  im lặng — trong ⚙, ô *Khi có mã mới* dưới *Sàn* (có nút *Nghe thử*).
 - **Không cần đăng nhập**, không cần mở Chrome.
 
 ## Cài đặt (1 lần)

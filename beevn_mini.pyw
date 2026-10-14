@@ -34,7 +34,7 @@ from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.3.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.4.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -380,40 +380,49 @@ class App:
                     continue
                 fresh = [st['symbol'] for st in m if st['symbol'] not in before]
                 if fresh:
-                    groups.append((c['name'], fresh))
+                    groups.append((c['name'], fresh, c.get('alert', 'speak')))
             if groups:
                 until = time.time() + NEW_HIGHLIGHT_SEC
-                for _, syms in groups:
+                for _, syms, _ in groups:
                     for sym in syms:
-                        self.new_until[sym] = until
+                        self.new_until[sym] = until      # hàng mới vẫn sáng vàng kể cả khi im lặng
                 self.alert(groups)
                 self.root.after(int(NEW_HIGHLIGHT_SEC * 1000) + 100, self.render)
         self.prev_by_key = now_by_key
 
-    def alert(self, groups, mode=None):
-        """groups = [(tên tiêu chí, [mã mới…])]."""
-        mode = mode or self.cfg.get('alert', 'speak')
-        groups = [(n, list(syms)) for n, syms in groups if syms]
-        if mode == 'off' or not groups:
-            return
-        if mode == 'speak':
+    def alert(self, groups, names=None):
+        """groups = [(tên tiêu chí, [mã mới…], kiểu báo của tiêu chí đó)].
+        Các tiêu chí "đọc tên mã" được đọc gộp một câu; có tiêu chí "kêu ting" thì kêu một tiếng."""
+        groups = [(n, list(syms), mode) for n, syms, mode in groups if syms]
+        speak = [(n, syms) for n, syms, mode in groups if mode == 'speak']
+        beep = any(mode == 'beep' for _, _, mode in groups)
+        if speak:
             if self.speaker and self.speaker.poll() is None:
-                self.pending_say += groups
-                return
-            vi, en = core.alert_text_groups(groups)
+                self.pending_say += speak
+                speak = []
+            elif not self.say(speak, names):
+                beep = True                # không đọc được → kêu ting thay
+        if beep:
             try:
-                self.speaker = subprocess.Popen(
-                    ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_PS],
-                    env={**os.environ, 'BEEVN_SAY': vi, 'BEEVN_SAY_EN': en},
-                    creationflags=0x08000000)
-                return
-            except OSError as e:
-                log('speak: ' + repr(e))   # không đọc được → kêu ting thay
+                import winsound
+                winsound.MessageBeep(0x40)
+            except Exception:
+                pass
+
+    def say(self, groups, names=None):
+        """Đọc to [(tên tiêu chí, [mã…])]. Có nhiều tiêu chí thì đọc kèm tên tiêu chí. False = không đọc được."""
+        if names is None:
+            names = len(self.cfg['criteria']) > 1
+        vi, en = core.alert_text_groups(groups, names=names)
         try:
-            import winsound
-            winsound.MessageBeep(0x40)
-        except Exception:
-            pass
+            self.speaker = subprocess.Popen(
+                ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_PS],
+                env={**os.environ, 'BEEVN_SAY': vi, 'BEEVN_SAY_EN': en},
+                creationflags=0x08000000)
+            return True
+        except OSError as e:
+            log('speak: ' + repr(e))
+            return False
 
     def say_pending(self):
         """Đọc nốt những mã mới đến trong lúc đang đọc dở (gộp theo tiêu chí, bỏ mã trùng)."""
@@ -423,7 +432,7 @@ class App:
                 lst = merged.setdefault(name, [])
                 lst += [x for x in syms if x not in lst]
             self.pending_say = []
-            self.alert(list(merged.items()))
+            self.alert([(n, syms, 'speak') for n, syms in merged.items()])
 
     def ma_source_note(self):
         if self.hist_progress < 1:
@@ -934,6 +943,9 @@ class App:
                     self.hist_progress = 1.0 if progress is None else progress
                     if self.hist.get('source') == 'fireant':
                         self.stat_note = None
+                    # MA / KL trung bình vừa có (hoặc đổi nguồn) → tiêu chí dùng % KL/TB, MA bỗng khớp thêm cả
+                    # loạt mã; đó không phải "mã mới lọt lọc" → lấy lại mốc so, không báo.
+                    self.prev_by_key = None
                     self.compute()
                 elif kind == 'update':
                     self.show_update(payload[0])
@@ -1014,9 +1026,14 @@ class SettingsWindow:
                                      values=[EXCHANGE_LABEL[k] for k in ('HSX', 'HNX', 'UPCOM', 'ALL')])
         self.exchange.grid(row=4, column=1, sticky='w', pady=2)
 
+        ttk.Label(body, text='Khi có mã mới').grid(row=5, column=0, sticky='w', pady=2)
+        self.alert = ttk.Combobox(body, state='readonly', width=16, values=[n for _, n in ALERT_LABEL])
+        self.alert.grid(row=5, column=1, sticky='w', pady=2)
+        ttk.Button(body, text='Nghe thử', command=self.test_alert).grid(row=5, column=2, sticky='w', pady=2)
+
         self.rows = {}
         op_names = [n for _, n in OP_LABEL]
-        for i, (key, label) in enumerate(core.FILTERABLE, start=5):
+        for i, (key, label) in enumerate(core.FILTERABLE, start=6):
             ttk.Label(body, text=label).grid(row=i, column=0, sticky='w', pady=2)
             op = ttk.Combobox(body, state='readonly', width=16, values=op_names)
             op.grid(row=i, column=1, sticky='w', padx=(0, 8), pady=2)
@@ -1025,7 +1042,7 @@ class SettingsWindow:
             self.rows[key] = (op, val)
         self.load_form()
 
-        r = 5 + len(core.FILTERABLE)
+        r = 6 + len(core.FILTERABLE)
         ttk.Separator(body).grid(row=r, column=0, columnspan=3, sticky='ew', pady=10)
         ttk.Label(body, text='Sắp xếp theo').grid(row=r + 1, column=0, sticky='w', pady=2)
         self.sort_col = ttk.Combobox(body, state='readonly', width=16, values=[l for _, l in core.COLUMNS])
@@ -1039,11 +1056,6 @@ class SettingsWindow:
         self.opacity = tk.DoubleVar(value=cfg.get('opacity', 1.0))
         ttk.Scale(body, from_=0.5, to=1.0, variable=self.opacity, length=150).grid(row=r + 2, column=1, sticky='w')
 
-        ttk.Label(body, text='Khi có mã mới').grid(row=r + 3, column=0, sticky='w', pady=(8, 2))
-        self.alert = ttk.Combobox(body, state='readonly', width=16, values=[n for _, n in ALERT_LABEL])
-        self.alert.set(dict(ALERT_LABEL).get(cfg.get('alert', 'speak'), ALERT_LABEL[0][1]))
-        self.alert.grid(row=r + 3, column=1, sticky='w', pady=(8, 2))
-        ttk.Button(body, text='Nghe thử', command=self.test_alert).grid(row=r + 3, column=2, sticky='w', pady=(8, 2))
         self.startup = tk.BooleanVar(value=has_startup())
         ttk.Checkbutton(body, text='Tự mở khi bật máy', variable=self.startup) \
             .grid(row=r + 4, column=0, columnspan=3, sticky='w', pady=2)
@@ -1079,10 +1091,16 @@ class SettingsWindow:
         return {n: k for k, n in ALERT_LABEL}.get(self.alert.get(), 'speak')
 
     def test_alert(self):
-        # Đọc thử vài mã đầu đang khớp ở từng khối, chưa có thì lấy mã mẫu
-        groups = [(c['name'], [st['symbol'] for st in m[:2]]) for c, m in self.app.sections]
-        groups = [g for g in groups if g[1]] or [('Tiêu chí 1', ['VIB', 'MBB'])]
-        self.app.alert(groups, mode=self.alert_mode())
+        # Nghe thử đúng tiêu chí đang sửa: 2 mã đầu đang khớp tiêu chí đó, chưa có thì lấy mã mẫu
+        name = self.crit_name.get().strip() or self.crits[self.cur]['name']
+        orig = self.crits[self.cur]['name']
+        syms = next(([st['symbol'] for st in m[:2]] for c, m in self.app.sections if c['name'] == orig), [])
+        mode = self.alert_mode()
+        if mode == 'off':
+            messagebox.showinfo(APP_NAME, f'Tiêu chí "{name}" đang để Im lặng: có mã mới chỉ sáng vàng, không kêu.',
+                                parent=self.win)
+            return
+        self.app.alert([(name, syms or ['VIB', 'MBB'], mode)], names=len(self.crits) > 1)
 
     # ── Bản nháp tiêu chí ──
     def load_form(self):
@@ -1092,6 +1110,7 @@ class SettingsWindow:
         self.crit_name.delete(0, 'end')
         self.crit_name.insert(0, c['name'])
         self.exchange.set(EXCHANGE_LABEL.get(c['exchange'], 'HSX'))
+        self.alert.set(dict(ALERT_LABEL).get(c.get('alert', 'speak'), ALERT_LABEL[0][1]))
         op_label = dict(OP_LABEL)
         for key, (op, val) in self.rows.items():
             f = c['filters'].get(key) or {}
@@ -1118,7 +1137,8 @@ class SettingsWindow:
         label_to_ex = {v: k for k, v in EXCHANGE_LABEL.items()}
         self.crits[self.cur] = {'name': self.crit_name.get().strip() or f'Tiêu chí {self.cur + 1}',
                                 'exchange': label_to_ex.get(self.exchange.get(), 'HSX'),
-                                'filters': filters}
+                                'filters': filters,
+                                'alert': self.alert_mode()}
         return True
 
     def switch(self, i):
@@ -1134,7 +1154,8 @@ class SettingsWindow:
         if not self.store_form():
             return
         n = len(self.crits) + 1
-        self.crits.append({'name': f'Tiêu chí {n}', 'exchange': self.crits[self.cur]['exchange'], 'filters': {}})
+        self.crits.append({'name': f'Tiêu chí {n}', 'exchange': self.crits[self.cur]['exchange'], 'filters': {},
+                           'alert': self.crits[self.cur].get('alert', 'speak')})
         self.cur = len(self.crits) - 1
         self.load_form()
         self.crit_name.focus_set()
@@ -1166,7 +1187,6 @@ class SettingsWindow:
             'criteria': [dict(c, filters=dict(c['filters'])) for c in self.crits],
             'sortColumn': label_to_col.get(self.sort_col.get(), 'value'),
             'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc',
-            'alert': self.alert_mode(),
             'opacity': round(self.opacity.get(), 2),
             'cookieSheetId': sheet,
         })
