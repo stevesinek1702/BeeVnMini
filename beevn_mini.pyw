@@ -162,6 +162,21 @@ def remove_shortcut(folder):
         pass
 
 
+SHORTCUT_FOLDERS = ('Desktop', 'Startup', 'Programs')   # Programs = menu Start
+
+
+def make_all_shortcuts():
+    ok = True
+    for f in SHORTCUT_FOLDERS:
+        ok &= make_shortcut(f)
+    return ok
+
+
+def remove_all_shortcuts():
+    for f in SHORTCUT_FOLDERS:
+        remove_shortcut(f)
+
+
 def has_startup():
     return os.path.exists(shortcut_path('Startup'))
 
@@ -187,7 +202,7 @@ def virtual_screen():
 # ── Ứng dụng ────────────────────────────────────────────────────────────
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, lock=None):
         self.root = root
         saved = load_json(CONFIG_PATH, {})
         self.cfg = {**DEFAULT_CONFIG, **saved}
@@ -237,6 +252,8 @@ class App:
         self.render()
         threading.Thread(target=self.quote_loop, daemon=True).start()
         threading.Thread(target=self.hist_loop, daemon=True).start()
+        if lock is not None:
+            threading.Thread(target=self.listen_loop, args=(lock,), daemon=True).start()
         root.after(200, self.poll_queue)
         root.after(5000, self.keep_on_top)
         root.after(15000, self.tick)
@@ -523,8 +540,7 @@ class App:
         if not messagebox.askyesno(APP_NAME, 'Gỡ Bee.vn mini khỏi máy?\n\nXoá biểu tượng ngoài Desktop, '
                                              'bỏ tự mở khi bật máy và tắt chương trình.', parent=self.root):
             return
-        remove_shortcut('Desktop')
-        remove_shortcut('Startup')
+        remove_all_shortcuts()
         if os.path.normcase(sys.executable) == os.path.normcase(INSTALLED_EXE):
             # File đang chạy không tự xoá được → nhờ cmd xoá sau khi chương trình tắt
             subprocess.Popen(f'cmd /c timeout /t 3 /nobreak >nul & rmdir /s /q "{INSTALL_DIR}"',
@@ -597,6 +613,27 @@ class App:
             self.wake_hist.wait(HIST_CHECK_SEC)
             self.wake_hist.clear()
 
+    def listen_loop(self, lock):
+        """Nghe bản thứ hai (người dùng bấm biểu tượng khi đang chạy) nhắn "show"."""
+        while True:
+            try:
+                conn, _ = lock.accept()
+                with conn:
+                    conn.settimeout(2)
+                    if conn.recv(16).startswith(b'show'):
+                        self.q.put(('show',))
+            except OSError:
+                time.sleep(1)
+
+    def bring_front(self):
+        """Hiện bảng giá lên trước mặt, kéo về trong màn hình nếu đang lạc ra ngoài, nháy viền vàng."""
+        self.root.deiconify()
+        self.root.attributes('-topmost', True)
+        self.root.lift()
+        self.fit()
+        self.root.configure(bg=GOLD)
+        self.root.after(1200, lambda: self.root.configure(bg=LINE))
+
     def poll_queue(self):
         changed = False
         try:
@@ -614,6 +651,9 @@ class App:
                     if self.hist.get('source') == 'fireant':
                         self.stat_note = None
                     self.compute()
+                elif kind == 'show':
+                    self.bring_front()
+                    continue
                 elif kind == 'stat_note':
                     self.stat_note = payload[0]
                 elif kind == 'hist_progress':
@@ -791,7 +831,7 @@ def offer_install(lock):
         import shutil
         os.makedirs(INSTALL_DIR, exist_ok=True)
         shutil.copy2(sys.executable, INSTALLED_EXE)
-        ok = make_shortcut('Desktop') & make_shortcut('Startup')
+        ok = make_all_shortcuts()
     except OSError as e:
         log('install: ' + repr(e))
         messagebox.showerror(APP_NAME, 'Không cài được: ' + str(e))
@@ -814,8 +854,7 @@ def main():
         pass
 
     if '--uninstall' in sys.argv:
-        remove_shortcut('Desktop')
-        remove_shortcut('Startup')
+        remove_all_shortcuts()
         r = tk.Tk()
         r.withdraw()
         messagebox.showinfo(APP_NAME, 'Đã xoá biểu tượng ngoài Desktop và tự chạy khi bật máy.\n'
@@ -823,19 +862,25 @@ def main():
         return
 
     if '--install' in sys.argv:
-        ok = make_shortcut('Desktop') & make_shortcut('Startup')
+        ok = make_all_shortcuts()
         r = tk.Tk()
         r.withdraw()
-        messagebox.showinfo(APP_NAME, 'Đã cài xong.\n\n• Biểu tượng "Bee.vn mini" ở ngoài Desktop.\n'
+        messagebox.showinfo(APP_NAME, 'Đã cài xong.\n\n• Biểu tượng "Bee.vn mini" ở ngoài Desktop và trong menu Start.\n'
                                       '• Tự mở mỗi khi bật máy.\n\nBảng giá mini sẽ hiện ở góc dưới-phải màn hình.'
                             if ok else 'Không tạo được biểu tượng — xem log ở ' + LOG_PATH)
         r.destroy()
 
-    # Chỉ chạy một bản: bản thứ hai (bấm biểu tượng lần nữa) tự thoát.
+    # Chỉ chạy một bản. Bấm biểu tượng lần nữa → bản thứ hai nhắn bản đang chạy "hiện lên" rồi tự thoát.
     lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         lock.bind(('127.0.0.1', SINGLE_INSTANCE_PORT))
+        lock.listen(2)
     except OSError:
+        try:
+            with socket.create_connection(('127.0.0.1', SINGLE_INSTANCE_PORT), timeout=2) as c:
+                c.sendall(b'show')
+        except OSError:
+            pass
         if FROZEN and os.path.normcase(sys.executable) != os.path.normcase(INSTALLED_EXE):
             r = tk.Tk()
             r.withdraw()
@@ -854,7 +899,7 @@ def main():
     except tk.TclError:
         pass
     root.report_callback_exception = lambda *a: log('ui: ' + ''.join(traceback.format_exception(*a)))
-    App(root)
+    App(root, lock)
     root.mainloop()
 
 

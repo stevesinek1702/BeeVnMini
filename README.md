@@ -16,7 +16,14 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 2. Bấm đúp vào file **`Cai dat.bat`**.
 3. Hiện thông báo *"Đã cài xong"* → bấm **OK**. Bảng giá mini hiện ở góc dưới-phải màn hình.
 
-Từ đó về sau nó tự mở mỗi khi bật máy. Lỡ tắt thì bấm đúp biểu tượng **Bee.vn mini** ngoài Desktop.
+## Mở chương trình
+
+- **Bật máy là tự mở** — không phải làm gì.
+- Lỡ tắt (bấm ✕): bấm đúp biểu tượng **Bee.vn mini** ngoài Desktop, **hoặc** bấm phím Windows ⊞,
+  gõ `Bee` → Enter.
+- Không thấy bảng giá đâu (bị kéo lạc, đang ở màn hình khác…): làm y như trên — nếu nó đang chạy,
+  nó sẽ **hiện lên trước mặt, nháy viền vàng**, không mở thêm bản thứ hai. Vẫn không thấy thì chuột
+  phải lên nó → *Về góc dưới-phải màn hình*.
 
 ## Dùng
 
