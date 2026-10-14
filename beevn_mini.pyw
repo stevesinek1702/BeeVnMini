@@ -414,12 +414,18 @@ class App:
         if visible:
             cols = core.table_columns(cfg, full)
             active = set(core.active_filter_keys(filters))
+            sort_col, sort_dir = cfg.get('sortColumn'), cfg.get('sortDirection')
             for ci, (key, label) in enumerate(cols):
-                txt = label.upper() + (' •' if key in active else '')
-                lbl = tk.Label(self.table, text=txt, bg=BG, fg=FILTERED if key in active else MUTED,
-                               font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8)
+                arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
+                txt = label.upper() + (' •' if key in active else '') + arrow
+                fg = FILTERED if key in active else (TEXT if key == sort_col else MUTED)
+                lbl = tk.Label(self.table, text=txt, bg=BG, fg=fg,
+                               font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
                 lbl.grid(row=0, column=ci, sticky='ew', pady=(3, 2))
-                self._bind_table(lbl)
+                # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ)
+                lbl.bind('<Button-1>', lambda e, k=key: self.sort_by(k))
+                lbl.bind('<MouseWheel>', self.on_wheel)
+                lbl.bind('<Button-3>', self.show_menu)
             now = time.time()
             for ri, s in enumerate(visible, 1):
                 bg = NEW_BG if self.new_until.get(s['symbol'], 0) > now else (ALT if ri % 2 == 0 else BG)
@@ -483,6 +489,14 @@ class App:
         self.root.geometry(f'{w}x{h}+{int(right - w)}+{int(bottom - h)}')
 
     # ── Tương tác ──
+    def sort_by(self, key):
+        col, direction = core.next_sort(self.cfg.get('sortColumn'), self.cfg.get('sortDirection'), key)
+        self.cfg['sortColumn'], self.cfg['sortDirection'] = col, direction
+        save_json(CONFIG_PATH, self.cfg)
+        self.offset = 0
+        self.compute()
+        self.render()
+
     def toggle_mode(self):
         self.cfg['mode'] = 'compact' if self.cfg['mode'] == 'full' else 'full'
         save_json(CONFIG_PATH, self.cfg)

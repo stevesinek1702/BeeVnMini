@@ -30,7 +30,8 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 | Muốn | Làm |
 |---|---|
 | Đặt / đổi bộ lọc, đổi sàn | Bấm **⚙** |
-| Xem đủ cột / thu gọn | Bấm vào bảng (hoặc nút ⤢) |
+| Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP / Sàn xếp A → Z |
+| Xem đủ cột / thu gọn | Bấm vào các hàng mã (hoặc nút ⤢) |
 | Dời chỗ (kể cả sang màn hình khác) | Giữ chuột vào thanh trên cùng (chỗ chữ Bee.vn) rồi kéo — lần sau mở lại đúng chỗ đó |
 | Nhiều mã quá dài | Lăn chuột trên bảng |
 | Tải lại ngay | Nút **↻** |

@@ -58,6 +58,16 @@ class LocGiongWeb(unittest.TestCase):
         self.assertNotIn('exchange', [c[0] for c in core.table_columns({**cfg, 'exchange': 'HSX'}, True)])
         self.assertEqual(core.format_cell({'exchange': 'UPCOM'}, 'exchange'), ('UpCom', 'muted'))
 
+    def test_bam_tieu_de_cot_de_sap_xep(self):
+        self.assertEqual(core.next_sort('value', 'desc', 'value'), ('value', 'asc'))
+        self.assertEqual(core.next_sort('value', 'asc', 'value'), ('value', 'desc'))
+        self.assertEqual(core.next_sort('value', 'desc', 'changePercent'), ('changePercent', 'desc'))
+        self.assertEqual(core.next_sort('value', 'desc', 'symbol'), ('symbol', 'asc'))
+        # Xếp theo sàn: cùng sàn thì GTGD lớn trước
+        rows = [{'symbol': 'A', 'exchange': 'HSX', 'value': 1}, {'symbol': 'B', 'exchange': 'HNX', 'value': 5},
+                {'symbol': 'C', 'exchange': 'HSX', 'value': 9}]
+        self.assertEqual([r['symbol'] for r in core.sort_stocks(rows, 'exchange', 'asc')], ['B', 'C', 'A'])
+
     def test_dinh_dang_giong_hang_vib(self):
         self.assertEqual(core.format_cell(VIB, 'price'), ('14.2', 'up'))
         self.assertEqual(core.format_cell(VIB, 'change')[0], '+0.3')

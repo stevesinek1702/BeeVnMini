@@ -312,12 +312,24 @@ def apply_filters(stocks, filters):
     return out
 
 
+TEXT_COLUMNS = ('symbol', 'exchange')
+
+
 def sort_stocks(stocks, column, direction):
     asc = direction == 'asc'
     empty = math.inf if asc else -math.inf
-    if column == 'symbol':
-        return sorted(stocks, key=lambda s: str(s.get('symbol') or ''), reverse=not asc)
+    if column in TEXT_COLUMNS:
+        # Xếp theo sàn thì trong cùng một sàn vẫn để mã GTGD lớn lên trước cho dễ nhìn
+        base = sorted(stocks, key=lambda s: s.get('value') or 0, reverse=True)
+        return sorted(base, key=lambda s: str(s.get(column) or ''), reverse=not asc)
     return sorted(stocks, key=lambda s: empty if s.get(column) is None else s.get(column), reverse=not asc)
+
+
+def next_sort(cur_column, cur_direction, clicked):
+    """Bấm tiêu đề cột: cùng cột thì đảo chiều; cột mới thì chữ A→Z, số lớn → nhỏ."""
+    if clicked == cur_column:
+        return clicked, ('asc' if cur_direction == 'desc' else 'desc')
+    return clicked, ('asc' if clicked in TEXT_COLUMNS else 'desc')
 
 
 def select_matches(all_stocks, cfg):
