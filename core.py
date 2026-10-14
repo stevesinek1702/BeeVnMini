@@ -440,9 +440,10 @@ EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
 
 
 def table_columns(cfg, full):
-    """Cột hiện ra. Lọc cả 3 sàn thì thêm cột Sàn ngay sau Mã CP để biết mã nào sàn nào."""
+    """Cột hiện ra. Lọc cả 3 sàn thì chế độ ĐẦY ĐỦ có thêm cột Sàn sau Mã CP; chế độ thu gọn
+    không hiện (anh Si: sàn chỉ là phạm vi lọc, bỏ cho gọn)."""
     cols = list(COLUMNS) if full else compact_columns(cfg.get('filters'))
-    if cfg.get('exchange') == 'ALL':
+    if full and cfg.get('exchange') == 'ALL':
         cols.insert(1, EXCHANGE_COL)
     return cols
 

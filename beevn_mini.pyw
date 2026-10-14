@@ -34,7 +34,7 @@ from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.4.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.4.1'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')

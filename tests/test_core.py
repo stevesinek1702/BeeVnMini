@@ -52,8 +52,10 @@ class LocGiongWeb(unittest.TestCase):
 
     def test_ca_3_san_them_cot_san(self):
         cfg = {'exchange': 'ALL', 'filters': FILTERS}
+        # Thu gọn: không có cột Sàn cho gọn; đầy đủ: có
         self.assertEqual([c[0] for c in core.table_columns(cfg, False)],
-                         ['symbol', 'exchange', 'price', 'changePercent', 'volume'])
+                         ['symbol', 'price', 'changePercent', 'volume'])
+        self.assertEqual([c[0] for c in core.table_columns(cfg, True)][:2], ['symbol', 'exchange'])
         self.assertEqual(len(core.table_columns(cfg, True)), 12)
         self.assertNotIn('exchange', [c[0] for c in core.table_columns({**cfg, 'exchange': 'HSX'}, True)])
         self.assertEqual(core.format_cell({'exchange': 'UPCOM'}, 'exchange'), ('UpCom', 'muted'))

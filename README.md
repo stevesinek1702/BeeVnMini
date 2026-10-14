@@ -33,7 +33,7 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 |---|---|
 | Đặt / đổi bộ lọc, đổi sàn | Bấm **⚙** |
 | Thêm tiêu chí thứ 2, 3… | **⚙** → **＋ Thêm tiêu chí** → đặt tên + sàn + điều kiện → **Lưu**. Bảng giá hiện mỗi tiêu chí một khối (tên · sàn · số mã); đổi qua lại bằng ô *Tiêu chí*, bỏ bằng nút **Xoá** |
-| Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP / Sàn xếp A → Z |
+| Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP xếp A → Z. Cột Sàn chỉ hiện ở chế độ đầy đủ |
 | Xem đủ cột / thu gọn | Bấm vào các hàng mã (hoặc nút ⤢) |
 | Dời chỗ (kể cả sang màn hình khác) | Giữ chuột vào thanh trên cùng (chỗ chữ Bee.vn) rồi kéo — lần sau mở lại đúng chỗ đó |
 | Nhiều mã quá dài | Lăn chuột trên khối đó — chỉ danh sách khối đó trượt, tên tiêu chí + tiêu đề cột đứng yên |
