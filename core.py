@@ -319,6 +319,9 @@ def transform_quote(q, hist=None, tech_stats=None, now=None):
         'ma45': h.get('ma45'),
         'demandStrength': luc_cau(q),
     }
+    # Giá đang ở trần / sàn → mã và các ô giá đổi sang màu trần (tím) / sàn (xanh lơ) như bảng giá
+    cur, top, bottom = q.get('PriceCurrent'), q.get('PriceCeiling'), q.get('PriceFloor')
+    row['limit'] = 'ceil' if cur and top and cur >= top else ('floor' if cur and bottom and cur <= bottom else None)
     row.update(conditions.quote_metrics(q))
     row.update(conditions.tech_metrics(tech_stats or None, price, change))
     now = now or vn_now()
@@ -499,6 +502,14 @@ def criteria_from_config(cfg):
 
     def alert_of(c):
         return c.get('alert') if c.get('alert') in ALERT_MODES else default_alert
+
+    def sort_of(c):
+        """Mỗi tiêu chí có kiểu sắp xếp RIÊNG (bấm tiêu đề cột ở khối này không đụng khối khác);
+        cài đặt cũ chỉ có kiểu chung → mỗi tiêu chí lấy nó làm mốc ban đầu."""
+        col = c.get('sortColumn') or cfg.get('sortColumn')
+        if not col:
+            return {}
+        return {'sortColumn': col, 'sortDirection': c.get('sortDirection') or cfg.get('sortDirection') or 'desc'}
     out = []
     for i, c in enumerate(cfg.get('criteria') or [], 1):
         if isinstance(c, dict):
@@ -509,10 +520,11 @@ def criteria_from_config(cfg):
             signals = [s for s in map(conditions.normalize_signal, c.get('signals') or []) if s]
             if signals:                      # tiêu chí không dùng tín hiệu thì giữ nguyên dạng cài đặt cũ
                 item['signals'] = signals
+            item.update(sort_of(c))
             out.append(item)
     if not out:
         out = [{'name': 'Tiêu chí 1', 'exchange': cfg.get('exchange') or 'HSX',
-                'filters': dict(cfg.get('filters') or {}), 'alert': default_alert}]
+                'filters': dict(cfg.get('filters') or {}), 'alert': default_alert, **sort_of({})}]
     return out
 
 
@@ -608,12 +620,13 @@ def format_volume(v):
 
 
 def format_cell(s, key):
-    """Trả (chữ, tông màu) — tông: 'up' | 'down' | 'flat' | 'muted' | ''."""
+    """Trả (chữ, tông màu) — tông: 'ceil' | 'floor' | 'up' | 'down' | 'flat' | 'muted' | ''."""
     change = s.get('change') or 0
-    tone = 'up' if change > 0 else ('down' if change < 0 else 'flat')
+    # Trần tím, sàn xanh lơ đè lên màu tăng / giảm
+    tone = s.get('limit') or ('up' if change > 0 else ('down' if change < 0 else 'flat'))
     plus = '+' if change > 0 else ''
     if key == 'symbol':
-        return s.get('symbol') or '', tone      # mã CP cùng màu với giá: tăng xanh lá, giảm đỏ, đứng giá vàng
+        return s.get('symbol') or '', tone      # mã CP cùng màu với giá: trần tím, tăng xanh lá, đứng giá vàng, giảm đỏ, sàn xanh lơ
     if key == 'exchange':
         return EXCHANGE_SHORT.get(s.get('exchange'), s.get('exchange') or ''), 'muted'
     if key == 'price':

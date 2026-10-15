@@ -36,7 +36,7 @@ from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.5.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.5.1'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -84,7 +84,8 @@ DEFAULT_CONFIG = {
 BG, HEAD, LINE = '#141428', '#1c1c38', '#2a2a4a'
 ALT, NEW_BG = '#191934', '#4a3b10'
 TEXT, MUTED, ACCENT, GOLD = '#e6e6f0', '#8a8aa8', '#38bdf8', '#fbbf24'
-TONE = {'up': '#22c55e', 'down': '#ef4444', 'flat': '#eab308', 'muted': MUTED, 'sym': ACCENT, '': TEXT}
+TONE = {'up': '#22c55e', 'down': '#ef4444', 'flat': '#eab308', 'ceil': '#c084fc', 'floor': '#22d3ee',
+        'muted': MUTED, 'sym': ACCENT, '': TEXT}
 FILTERED = '#f87171'
 SECTION = '#22224a'     # nền dòng tên tiêu chí
 
@@ -93,6 +94,8 @@ OP_LABEL = [('gt', 'Lớn hơn (>)'), ('lt', 'Nhỏ hơn (<)'), ('eq', 'Bằng (
 # Điều kiện thêm kiểu FireAnt: "từ / đến / trong khoảng" (FireAnt tính cả mốc)
 METRIC_OP_LABEL = [('ge', 'Từ (≥)'), ('le', 'Đến (≤)'), ('bt', 'Trong khoảng')]
 METRIC_UNIT = {'pct': '%', 'pct0': '%', 'int': 'phiên', 'vol': 'cổ phiếu', 'svol': 'cổ phiếu', 'sbil': 'tỷ đồng'}
+# Cột có thể chọn để xếp trong Cài đặt (đủ cột bảng giá + cột kiểu FireAnt)
+SORT_COLUMNS = list(core.COLUMNS) + [(k, conditions.METRIC_LABEL[k]) for k in conditions.METRIC_KEYS]
 
 FONT = ('Segoe UI', 10)
 FONT_BOLD = ('Segoe UI', 10, 'bold')
@@ -374,7 +377,7 @@ class App:
         for c in self.cfg['criteria']:
             if not core.has_conditions(c):
                 continue
-            m = core.select_matches(all_stocks, {**c, **sort})
+            m = core.select_matches(all_stocks, {**sort, **c})     # kiểu xếp riêng của tiêu chí đè lên kiểu chung
             self.sections.append((c, m))
             for st in m:
                 if st['symbol'] not in seen:
@@ -577,7 +580,7 @@ class App:
 
         cols = core.table_columns(c, full)
         active = set(core.active_filter_keys(c['filters']))
-        sort_col, sort_dir = self.cfg.get('sortColumn'), self.cfg.get('sortDirection')
+        sort_col, sort_dir = self.sort_of(c)
 
         # Tiêu đề cột — nằm ngoài vùng cuộn nên luôn thấy
         head = tk.Frame(box, bg=BG)
@@ -591,7 +594,7 @@ class App:
                            font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
             lbl.grid(row=0, column=ci, sticky='ew', pady=(3, 2))
             # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ)
-            lbl.bind('<Button-1>', lambda e, k=key: self.sort_by(k))
+            lbl.bind('<Button-1>', lambda e, k=key, crit=c: self.sort_by(k, crit))
             lbl.bind('<Button-3>', self.show_menu)
             head_cells.append(lbl)
 
@@ -702,11 +705,16 @@ class App:
             self._last_geo = geo
 
     # ── Tương tác ──
-    def sort_by(self, key):
-        col, direction = core.next_sort(self.cfg.get('sortColumn'), self.cfg.get('sortDirection'), key)
-        self.cfg['sortColumn'], self.cfg['sortDirection'] = col, direction
-        save_json(CONFIG_PATH, self.cfg)
-        self.scroll_pos = {}
+    def sort_of(self, crit):
+        """(cột, chiều) đang xếp của 1 tiêu chí; chưa có kiểu riêng thì theo kiểu chung."""
+        return (crit.get('sortColumn') or self.cfg.get('sortColumn'),
+                crit.get('sortDirection') or self.cfg.get('sortDirection'))
+
+    def sort_by(self, key, crit):
+        """Bấm tiêu đề cột: chỉ đổi cách xếp của tiêu chí đó, các tiêu chí khác giữ nguyên."""
+        crit['sortColumn'], crit['sortDirection'] = core.next_sort(*self.sort_of(crit), key)
+        save_json(CONFIG_PATH, self.cfg)           # crit chính là phần tử trong cfg['criteria']
+        self.scroll_pos.pop(crit['name'], None)    # xếp lại thì khối đó về đầu; khối khác giữ vị trí cuộn
         self.compute()
         self.render()
 
@@ -802,6 +810,7 @@ class App:
                 slim = [{k: q.get(k) for k in ('Symbol', 'Name', 'Exchange', 'PriceCurrent', 'PriceChange',
                                                'PricePercentChange', 'TotalVolume', 'TotalValue',
                                                'TotalActiveBuyVolume', 'PriceAverage', 'Date', 'PriceHigh', 'PriceLow',
+                                               'PriceCeiling', 'PriceFloor',
                                                'BuyForeignQuantity', 'SellForeignQuantity',
                                                'BuyForeignValue', 'SellForeignValue')} for q in quotes]
                 self.q.put(('quotes', time.time(), slim))
@@ -1091,9 +1100,16 @@ class SettingsWindow:
         self.alert.grid(row=5, column=1, sticky='w', pady=2)
         ttk.Button(body, text='Nghe thử', command=self.test_alert).grid(row=5, column=2, sticky='w', pady=2)
 
+        # Kiểu xếp là của TỪNG tiêu chí (bấm tiêu đề cột trên bảng giá cũng chỉ đổi tiêu chí đó)
+        ttk.Label(body, text='Sắp xếp theo').grid(row=6, column=0, sticky='w', pady=2)
+        self.sort_col = ttk.Combobox(body, state='readonly', width=16, values=[l for _, l in SORT_COLUMNS])
+        self.sort_col.grid(row=6, column=1, sticky='w', pady=2)
+        self.sort_dir = ttk.Combobox(body, state='readonly', width=12, values=['Giảm dần', 'Tăng dần'])
+        self.sort_dir.grid(row=6, column=2, sticky='w', pady=2)
+
         self.rows = {}
         op_names = [n for _, n in OP_LABEL]
-        for i, (key, label) in enumerate(core.FILTERABLE, start=6):
+        for i, (key, label) in enumerate(core.FILTERABLE, start=7):
             ttk.Label(body, text=label).grid(row=i, column=0, sticky='w', pady=2)
             op = ttk.Combobox(body, state='readonly', width=16, values=op_names)
             op.grid(row=i, column=1, sticky='w', padx=(0, 8), pady=2)
@@ -1102,7 +1118,7 @@ class SettingsWindow:
             self.rows[key] = (op, val)
 
         # Điều kiện thêm hiện ngay dưới các dòng lọc, cùng một danh sách (cột trái dài ra theo số điều kiện)
-        r = 6 + len(core.FILTERABLE)
+        r = 7 + len(core.FILTERABLE)
         ttk.Label(body, text='Điều kiện đã thêm', font=('Segoe UI', 9, 'bold')) \
             .grid(row=r, column=0, columnspan=3, sticky='w', pady=(10, 2))
         self.extra_list = ttk.Frame(body)
@@ -1114,21 +1130,13 @@ class SettingsWindow:
         ttk.Separator(side).pack(fill='x', pady=12)
         gen = ttk.Frame(side)
         gen.pack(anchor='w', fill='x')
-        ttk.Label(gen, text='Sắp xếp theo').grid(row=0, column=0, sticky='w', pady=2)
-        self.sort_col = ttk.Combobox(gen, state='readonly', width=16, values=[l for _, l in core.COLUMNS])
-        self.sort_col.set(core.LABEL.get(cfg['sortColumn'], 'GTGD'))
-        self.sort_col.grid(row=0, column=1, sticky='w', pady=2)
-        self.sort_dir = ttk.Combobox(gen, state='readonly', width=12, values=['Giảm dần', 'Tăng dần'])
-        self.sort_dir.set('Tăng dần' if cfg['sortDirection'] == 'asc' else 'Giảm dần')
-        self.sort_dir.grid(row=0, column=2, sticky='w', padx=(8, 0), pady=2)
-
-        ttk.Label(gen, text='Độ trong suốt').grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Label(gen, text='Độ trong suốt').grid(row=0, column=0, sticky='w', pady=2)
         self.opacity = tk.DoubleVar(value=cfg.get('opacity', 1.0))
-        ttk.Scale(gen, from_=0.5, to=1.0, variable=self.opacity, length=150).grid(row=1, column=1, sticky='w')
+        ttk.Scale(gen, from_=0.5, to=1.0, variable=self.opacity, length=150).grid(row=0, column=1, sticky='w', padx=(8, 0))
 
         self.startup = tk.BooleanVar(value=has_startup())
         ttk.Checkbutton(gen, text='Tự mở khi bật máy', variable=self.startup) \
-            .grid(row=2, column=0, columnspan=3, sticky='w', pady=2)
+            .grid(row=1, column=0, columnspan=3, sticky='w', pady=2)
 
         ttk.Separator(side).pack(fill='x', pady=12)
         ttk.Label(side, text='Sheet cookie FireAnt (tuỳ chọn)', font=('Segoe UI', 9, 'bold')).pack(anchor='w')
@@ -1332,6 +1340,8 @@ class SettingsWindow:
         self.crit_name.insert(0, c['name'])
         self.exchange.set(EXCHANGE_LABEL.get(c['exchange'], 'HSX'))
         self.alert.set(dict(ALERT_LABEL).get(c.get('alert', 'speak'), ALERT_LABEL[0][1]))
+        self.sort_col.set(dict(SORT_COLUMNS).get(c.get('sortColumn'), core.LABEL['value']))
+        self.sort_dir.set('Tăng dần' if c.get('sortDirection') == 'asc' else 'Giảm dần')
         op_label = dict(OP_LABEL)
         for key, (op, val) in self.rows.items():
             f = c['filters'].get(key) or {}
@@ -1360,10 +1370,13 @@ class SettingsWindow:
             messagebox.showwarning(APP_NAME, 'Giá trị không phải số: ' + ', '.join(bad), parent=self.win)
             return False
         label_to_ex = {v: k for k, v in EXCHANGE_LABEL.items()}
+        label_to_col = {l: k for k, l in SORT_COLUMNS}
         new = {'name': self.crit_name.get().strip() or f'Tiêu chí {self.cur + 1}',
                'exchange': label_to_ex.get(self.exchange.get(), 'HSX'),
                'filters': filters,
-               'alert': self.alert_mode()}
+               'alert': self.alert_mode(),
+               'sortColumn': label_to_col.get(self.sort_col.get(), 'value'),
+               'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc'}
         if cur.get('signals'):
             new['signals'] = cur['signals']
         self.crits[self.cur] = new
@@ -1382,8 +1395,10 @@ class SettingsWindow:
         if not self.store_form():
             return
         n = len(self.crits) + 1
-        self.crits.append({'name': f'Tiêu chí {n}', 'exchange': self.crits[self.cur]['exchange'], 'filters': {},
-                           'alert': self.crits[self.cur].get('alert', 'speak')})
+        cur = self.crits[self.cur]
+        self.crits.append({'name': f'Tiêu chí {n}', 'exchange': cur['exchange'], 'filters': {},
+                           'alert': cur.get('alert', 'speak'),
+                           'sortColumn': cur.get('sortColumn', 'value'), 'sortDirection': cur.get('sortDirection', 'desc')})
         self.cur = len(self.crits) - 1
         self.load_form()
         self.crit_name.focus_set()
@@ -1410,11 +1425,8 @@ class SettingsWindow:
         if sheet_raw and not sheet:
             messagebox.showwarning(APP_NAME, 'Không nhận ra link Google Sheet.', parent=self.win)
             return
-        label_to_col = {l: k for k, l in core.COLUMNS}
         self.app.apply_settings({
             'criteria': copy.deepcopy(self.crits),
-            'sortColumn': label_to_col.get(self.sort_col.get(), 'value'),
-            'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc',
             'opacity': round(self.opacity.get(), 2),
             'cookieSheetId': sheet,
         })

@@ -126,6 +126,27 @@ class LocGiongWeb(unittest.TestCase):
         self.assertEqual(core.criterion_key({**new[0], 'name': 'X'}), core.criterion_key(new[0]))
         self.assertNotEqual(core.criterion_key(new[0]), core.criterion_key(new[1]))
 
+    def test_moi_tieu_chi_xep_rieng(self):
+        # Cài đặt cũ chỉ có 1 kiểu xếp chung → mỗi tiêu chí lấy nó làm mốc; tiêu chí có kiểu riêng thì giữ riêng
+        c = core.criteria_from_config({'sortColumn': 'volRatio', 'sortDirection': 'asc',
+                                       'criteria': [{'name': 'A'}, 'rác',
+                                                    {'name': 'B', 'sortColumn': 'price', 'sortDirection': 'desc'},
+                                                    {'name': 'C', 'sortColumn': 'volume'}]})
+        self.assertEqual([(x['sortColumn'], x['sortDirection']) for x in c],
+                         [('volRatio', 'asc'), ('price', 'desc'), ('volume', 'asc')])   # C thiếu chiều → theo chiều chung
+        legacy = core.criteria_from_config({'sortColumn': 'value', 'sortDirection': 'desc', 'filters': FILTERS})
+        self.assertEqual((legacy[0]['sortColumn'], legacy[0]['sortDirection']), ('value', 'desc'))
+        self.assertNotIn('sortColumn', core.criteria_from_config({'criteria': [{'name': 'A'}]})[0])   # không đâu có → không thêm
+        # Cùng một nhóm mã, hai tiêu chí xếp ngược nhau: đổi cách xếp của tiêu chí này không đụng tiêu chí kia
+        all_ = {'HSX': [VIB, FPT, HPG], 'HNX': [], 'UPCOM': []}
+        base = {'exchange': 'HSX', 'filters': {'volume': {'operator': 'gt', 'value': 0}}}
+        a = {**base, 'sortColumn': 'price', 'sortDirection': 'asc'}
+        b = {**base, 'sortColumn': 'price', 'sortDirection': 'desc'}
+        self.assertEqual([s['symbol'] for s in core.select_matches(all_, a)], ['VIB', 'HPG', 'FPT'])
+        self.assertEqual([s['symbol'] for s in core.select_matches(all_, b)], ['FPT', 'HPG', 'VIB'])
+        # Đổi cách xếp không phải đổi bộ lọc → không báo "mã mới" giả
+        self.assertEqual(core.criterion_key(a), core.criterion_key(b))
+
     def test_cau_doc_nhieu_tieu_chi(self):
         self.assertEqual(core.alert_text_groups([('A', ['VIB'])])[0], 'Mã mới: V I B.')
         # Nhiều tiêu chí mà chỉ 1 cái có mã mới → vẫn đọc tên tiêu chí
@@ -160,6 +181,24 @@ class NguonDuLieu(unittest.TestCase):
         self.assertEqual(core.format_cell(r, 'volRatio'), ('--', 'muted'))
         # Lọc vẫn theo kiểu web: thiếu số coi như 0
         self.assertEqual(core.apply_filters([r], {'volRatio': {'operator': 'lt', 'value': 1}}), [r])
+
+    def test_tran_san_co_mau_rieng(self):
+        base = {**VIB_Q, 'PriceCeiling': 15000, 'PriceFloor': 13000}
+        up = core.transform_quote({**base, 'PriceCurrent': 15000, 'PriceChange': 1000, 'PricePercentChange': 0.0714})
+        down = core.transform_quote({**base, 'PriceCurrent': 13000, 'PriceChange': -1000, 'PricePercentChange': -0.0714})
+        mid = core.transform_quote(base)
+        self.assertEqual((up['limit'], down['limit'], mid['limit']), ('ceil', 'floor', None))
+        # Trần tím / sàn xanh lơ đè lên màu tăng / giảm ở mã và các ô giá; ô khác (KLGD) không đổi
+        for key in ('symbol', 'price', 'change', 'changePercent'):
+            self.assertEqual(core.format_cell(up, key)[1], 'ceil')
+            self.assertEqual(core.format_cell(down, key)[1], 'floor')
+            self.assertEqual(core.format_cell(mid, key)[1], 'up')
+        self.assertEqual(core.format_cell(up, 'volume')[1], '')
+        self.assertEqual(core.format_cell(down, 'changePercent'), ('-7.14%', 'floor'))
+        # Không có giá trần / sàn, hoặc chưa khớp lệnh nào (giá 0) → không coi là trần / sàn
+        self.assertIsNone(core.transform_quote(VIB_Q)['limit'])
+        self.assertIsNone(core.transform_quote({**base, 'PriceCurrent': 0, 'PriceFloor': 0})['limit'])
+        self.assertIsNone(core.transform_quote({**base, 'PriceCurrent': None})['limit'])
 
     def test_luc_cau_bo_ma_nhieu(self):
         self.assertIsNone(core.luc_cau({**VIB_Q, 'TotalValue': 50_000_000}))
