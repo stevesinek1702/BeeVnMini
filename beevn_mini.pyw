@@ -9,6 +9,7 @@ Chạy bằng pythonw (không hiện cửa sổ đen). Tham số:
   --install    tạo biểu tượng ngoài Desktop + tự chạy khi bật máy, rồi mở chương trình
   --uninstall  xoá hai biểu tượng đó
 """
+import copy
 import ctypes
 import json
 import os
@@ -29,12 +30,13 @@ HERE = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
 RES_DIR = getattr(sys, '_MEIPASS', HERE)
 sys.path.insert(0, HERE)
 
+import conditions  # noqa: E402
 import core  # noqa: E402
 from symbols import SYMBOLS  # noqa: E402
 
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.4.1'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.5.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -43,6 +45,7 @@ UPDATE_CHECK_SEC = 6 * 3600
 DATA_DIR = os.environ.get('BEEVN_DATA_DIR') or os.path.join(os.environ.get('APPDATA', HERE), 'BeeVnMini')
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 HIST_PATH = os.path.join(DATA_DIR, 'hist.json')
+TECH_PATH = os.path.join(DATA_DIR, 'tech.json')      # thống kê kỹ thuật từ nến ngày, mỗi ngày tải 1 lần
 LOG_PATH = os.path.join(DATA_DIR, 'log.txt')
 ICON_PATH = os.path.join(RES_DIR, 'beevn.ico')
 SPEAK_PS = os.path.join(RES_DIR, 'speak.ps1')
@@ -87,6 +90,9 @@ SECTION = '#22224a'     # nền dòng tên tiêu chí
 
 EXCHANGE_LABEL = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom', 'ALL': 'Cả 3 sàn'}
 OP_LABEL = [('gt', 'Lớn hơn (>)'), ('lt', 'Nhỏ hơn (<)'), ('eq', 'Bằng (=)')]
+# Điều kiện thêm kiểu FireAnt: "từ / đến / trong khoảng" (FireAnt tính cả mốc)
+METRIC_OP_LABEL = [('ge', 'Từ (≥)'), ('le', 'Đến (≤)'), ('bt', 'Trong khoảng')]
+METRIC_UNIT = {'pct': '%', 'pct0': '%', 'int': 'phiên', 'vol': 'cổ phiếu', 'svol': 'cổ phiếu', 'sbil': 'tỷ đồng'}
 
 FONT = ('Segoe UI', 10)
 FONT_BOLD = ('Segoe UI', 10, 'bold')
@@ -227,6 +233,8 @@ class App:
         self.fetched_at = None
         self.error = None
         self.hist_progress = 1.0 if self.hist.get('day') == core.vn_date(time.time()) else 0.0
+        self.tech = load_json(TECH_PATH, {})     # thống kê kỹ thuật (RSI, MACD, SMA, đỉnh đáy…) — chỉ tải khi có tiêu chí cần
+        self.tech_progress = 1.0 if self.tech.get('day') == core.vn_date(time.time()) else 0.0
         self.stat_note = None   # lý do không dùng được FireAnt cho cột MA (vd cookie hết hạn)
         self.prev_by_key = None      # {khoá tiêu chí: tập mã lượt trước} — để biết mã nào MỚI lọt lọc
         self.new_until = {}
@@ -236,6 +244,7 @@ class App:
         self.q = queue.Queue()
         self.wake = threading.Event()
         self.wake_hist = threading.Event()
+        self.wake_tech = threading.Event()
         self.drag = None
         self.settings_win = None
 
@@ -264,6 +273,7 @@ class App:
         self.render()
         threading.Thread(target=self.quote_loop, daemon=True).start()
         threading.Thread(target=self.hist_loop, daemon=True).start()
+        threading.Thread(target=self.tech_loop, daemon=True).start()
         self.update_info = None
         if FROZEN:            # chỉ bản .exe tự cập nhật; bản chạy từ mã nguồn thì cập nhật bằng git
             threading.Thread(target=self.update_loop, daemon=True).start()
@@ -355,13 +365,14 @@ class App:
         if self.quotes is None:
             return
         data = self.hist.get('data', {})
-        rows = [core.transform_quote(q, data.get(q.get('Symbol'))) for q in self.quotes]
+        tech = self.tech_data()
+        rows = [core.transform_quote(q, data.get(q.get('Symbol')), tech.get(q.get('Symbol'))) for q in self.quotes]
         all_stocks = core.group_by_exchange(rows)
         sort = {'sortColumn': self.cfg.get('sortColumn'), 'sortDirection': self.cfg.get('sortDirection')}
 
         self.sections, seen, flat = [], set(), []
         for c in self.cfg['criteria']:
-            if not core.active_filter_keys(c['filters']):
+            if not core.has_conditions(c):
                 continue
             m = core.select_matches(all_stocks, {**c, **sort})
             self.sections.append((c, m))
@@ -434,6 +445,17 @@ class App:
             self.pending_say = []
             self.alert([(n, syms, 'speak') for n, syms in merged.items()])
 
+    def tech_data(self):
+        """Thống kê kỹ thuật của hôm nay (số của hôm qua trở về trước đã cũ: tín hiệu "cắt" sẽ sai → bỏ)."""
+        return self.tech.get('data', {}) if self.tech.get('day') == core.vn_date(time.time()) else {}
+
+    def tech_pending(self):
+        """Có tiêu chí cần chỉ báo kỹ thuật mà số liệu chưa tải xong."""
+        return self.tech_progress < 1 and any(core.needs_tech(c) for c in self.cfg['criteria'])
+
+    def tech_note(self):
+        return f'đang tính chỉ báo kỹ thuật {int(self.tech_progress * 100)}%'
+
     def ma_source_note(self):
         if self.hist_progress < 1:
             return f'đang tính MA {int(self.hist_progress * 100)}%'
@@ -446,14 +468,14 @@ class App:
         full = cfg['mode'] == 'full'
         crits = cfg['criteria']
         sections = self.sections if self.quotes is not None else []
-        multi = len([c for c in crits if core.active_filter_keys(c['filters'])]) > 1
-        has_filter = any(core.active_filter_keys(c['filters']) for c in crits)
+        multi = len([c for c in crits if core.has_conditions(c)]) > 1
+        has_filter = any(core.has_conditions(c) for c in crits)
 
         # Dòng trạng thái: sàn (hoặc số tiêu chí) · số mã · giờ cập nhật
         if multi:
             parts = [f'{len(sections) or len(crits)} tiêu chí']
         else:
-            first = next((c for c in crits if core.active_filter_keys(c['filters'])), crits[0])
+            first = next((c for c in crits if core.has_conditions(c)), crits[0])
             parts = [EXCHANGE_LABEL.get(first['exchange'], first['exchange'])]
         if has_filter and self.quotes is not None:
             parts.append(f'{len(self.matches)} mã')
@@ -466,8 +488,10 @@ class App:
         # Dòng dưới thanh tiêu đề (chế độ đầy đủ): 1 tiêu chí → mô tả lọc + nguồn MA; nhiều → chỉ nguồn MA
         if full and has_filter:
             text = self.ma_source_note()
+            if self.tech_pending():
+                text += '   ·   ' + self.tech_note()
             if not multi and sections:
-                text = core.describe_filters(sections[0][0]['filters']) + '   ·   ' + text
+                text = core.describe_filters(sections[0][0]['filters'], sections[0][0].get('signals')) + '   ·   ' + text
             self.filters_lbl.config(text=text)
             self.filters_lbl.pack(fill='x', padx=8, pady=(3, 1), after=self.frame.winfo_children()[0])
         else:
@@ -493,6 +517,8 @@ class App:
             msg, color = f'{self.error}. Sẽ tự thử lại — kiểm tra mạng Internet.', '#fca5a5'
         elif not has_filter:
             msg, color = 'Chưa có bộ lọc. Bấm ⚙ để đặt lọc\n(vd Giá < 20, % Thay đổi > 2).', MUTED
+        elif total == 0 and self.tech_pending():
+            msg, color = self.tech_note().capitalize() + '…', MUTED
         elif not multi and total == 0:
             msg, color = 'Chưa có mã nào khớp bộ lọc.', MUTED
         else:
@@ -538,8 +564,8 @@ class App:
             if collapsed:
                 return info
             if full:
-                d = tk.Label(box, text=core.describe_filters(c['filters']), bg=BG, fg=MUTED, font=FONT_SMALL,
-                             anchor='w', padx=8)
+                d = tk.Label(box, text=core.describe_filters(c['filters'], c.get('signals')), bg=BG, fg=MUTED,
+                             font=FONT_SMALL, anchor='w', padx=8, wraplength=420, justify='left')
                 d.pack(fill='x')
                 self._bind_table(d)
         if not matches:
@@ -775,7 +801,9 @@ class App:
                 quotes = core.fetch_quotes(SYMBOLS)
                 slim = [{k: q.get(k) for k in ('Symbol', 'Name', 'Exchange', 'PriceCurrent', 'PriceChange',
                                                'PricePercentChange', 'TotalVolume', 'TotalValue',
-                                               'TotalActiveBuyVolume', 'PriceAverage')} for q in quotes]
+                                               'TotalActiveBuyVolume', 'PriceAverage', 'Date', 'PriceHigh', 'PriceLow',
+                                               'BuyForeignQuantity', 'SellForeignQuantity',
+                                               'BuyForeignValue', 'SellForeignValue')} for q in quotes]
                 self.q.put(('quotes', time.time(), slim))
             except Exception as e:
                 log('quotes: ' + repr(e))
@@ -817,6 +845,25 @@ class App:
                 log('hist: ' + traceback.format_exc())
             self.wake_hist.wait(HIST_CHECK_SEC)
             self.wake_hist.clear()
+
+    def tech_loop(self):
+        """Thống kê kỹ thuật từ nến ngày VNDirect (~1 phút cho cả thị trường). Chỉ tải khi có tiêu chí cần,
+        mỗi ngày một lần; mã nào lỗi mạng thì 10 phút sau thử lại."""
+        while True:
+            try:
+                if any(core.needs_tech(c) for c in self.cfg['criteria']):
+                    today = core.vn_date(time.time())
+                    cur = self.tech if self.tech.get('day') == today else {'day': today, 'data': {}}
+                    if len(cur['data']) < len(SYMBOLS):
+                        data = core.fetch_all_tech(SYMBOLS, today, cur['data'],
+                                                   on_progress=lambda p: self.q.put(('tech_progress', p)))
+                        cur = {'day': today, 'data': data}
+                        save_json(TECH_PATH, cur)
+                        self.q.put(('tech', cur, len(data) / len(SYMBOLS)))
+            except Exception:
+                log('tech: ' + traceback.format_exc())
+            self.wake_tech.wait(HIST_CHECK_SEC)
+            self.wake_tech.clear()
 
     def listen_loop(self, lock):
         """Nghe bản thứ hai (người dùng bấm biểu tượng khi đang chạy) nhắn "show"."""
@@ -947,6 +994,15 @@ class App:
                     # loạt mã; đó không phải "mã mới lọt lọc" → lấy lại mốc so, không báo.
                     self.prev_by_key = None
                     self.compute()
+                elif kind == 'tech':
+                    self.tech, self.tech_progress = payload
+                    # Chỉ báo vừa có → cả loạt mã bỗng khớp; đó không phải "mã mới lọt lọc" → lấy lại mốc so, không báo
+                    self.prev_by_key = None
+                    self.compute()
+                elif kind == 'tech_progress':
+                    self.tech_progress = payload[0]
+                    if not self.tech_pending():
+                        continue
                 elif kind == 'update':
                     self.show_update(payload[0])
                     continue
@@ -995,11 +1051,15 @@ class SettingsWindow:
             w.iconbitmap(ICON_PATH)
         except tk.TclError:
             pass
-        body = ttk.Frame(w, padding=14)
-        body.pack(fill='both')
+        outer = ttk.Frame(w, padding=14)
+        outer.pack(fill='both')
+        body = ttk.Frame(outer)                  # cột trái: các dòng lọc + điều kiện đã thêm
+        body.grid(row=0, column=0, sticky='nw')
+        side = ttk.Frame(outer)                  # cột phải: thêm điều kiện + cài đặt chung
+        side.grid(row=0, column=1, sticky='nw', padx=(28, 0))
 
         # Bản nháp các tiêu chí — sửa thoải mái, bấm Lưu mới áp dụng
-        self.crits = [dict(c, filters=dict(c['filters'])) for c in cfg['criteria']]
+        self.crits = copy.deepcopy(cfg['criteria'])
         self.cur = 0
 
         ttk.Label(body, text='Bộ lọc', font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, columnspan=3, sticky='w')
@@ -1040,38 +1100,47 @@ class SettingsWindow:
             val = ttk.Entry(body, width=14)
             val.grid(row=i, column=2, sticky='w', pady=2)
             self.rows[key] = (op, val)
+
+        # Điều kiện thêm hiện ngay dưới các dòng lọc, cùng một danh sách (cột trái dài ra theo số điều kiện)
+        r = 6 + len(core.FILTERABLE)
+        ttk.Label(body, text='Điều kiện đã thêm', font=('Segoe UI', 9, 'bold')) \
+            .grid(row=r, column=0, columnspan=3, sticky='w', pady=(10, 2))
+        self.extra_list = ttk.Frame(body)
+        self.extra_list.grid(row=r + 1, column=0, columnspan=3, sticky='ew')
+        self.build_extra(side)
         self.load_form()
 
-        r = 6 + len(core.FILTERABLE)
-        ttk.Separator(body).grid(row=r, column=0, columnspan=3, sticky='ew', pady=10)
-        ttk.Label(body, text='Sắp xếp theo').grid(row=r + 1, column=0, sticky='w', pady=2)
-        self.sort_col = ttk.Combobox(body, state='readonly', width=16, values=[l for _, l in core.COLUMNS])
+        # Cài đặt chung nằm cột phải, dưới bộ chọn → cửa sổ không cao thêm khi danh sách bên trái dài ra
+        ttk.Separator(side).pack(fill='x', pady=12)
+        gen = ttk.Frame(side)
+        gen.pack(anchor='w', fill='x')
+        ttk.Label(gen, text='Sắp xếp theo').grid(row=0, column=0, sticky='w', pady=2)
+        self.sort_col = ttk.Combobox(gen, state='readonly', width=16, values=[l for _, l in core.COLUMNS])
         self.sort_col.set(core.LABEL.get(cfg['sortColumn'], 'GTGD'))
-        self.sort_col.grid(row=r + 1, column=1, sticky='w', pady=2)
-        self.sort_dir = ttk.Combobox(body, state='readonly', width=12, values=['Giảm dần', 'Tăng dần'])
+        self.sort_col.grid(row=0, column=1, sticky='w', pady=2)
+        self.sort_dir = ttk.Combobox(gen, state='readonly', width=12, values=['Giảm dần', 'Tăng dần'])
         self.sort_dir.set('Tăng dần' if cfg['sortDirection'] == 'asc' else 'Giảm dần')
-        self.sort_dir.grid(row=r + 1, column=2, sticky='w', pady=2)
+        self.sort_dir.grid(row=0, column=2, sticky='w', padx=(8, 0), pady=2)
 
-        ttk.Label(body, text='Độ trong suốt').grid(row=r + 2, column=0, sticky='w', pady=2)
+        ttk.Label(gen, text='Độ trong suốt').grid(row=1, column=0, sticky='w', pady=2)
         self.opacity = tk.DoubleVar(value=cfg.get('opacity', 1.0))
-        ttk.Scale(body, from_=0.5, to=1.0, variable=self.opacity, length=150).grid(row=r + 2, column=1, sticky='w')
+        ttk.Scale(gen, from_=0.5, to=1.0, variable=self.opacity, length=150).grid(row=1, column=1, sticky='w')
 
         self.startup = tk.BooleanVar(value=has_startup())
-        ttk.Checkbutton(body, text='Tự mở khi bật máy', variable=self.startup) \
-            .grid(row=r + 4, column=0, columnspan=3, sticky='w', pady=2)
+        ttk.Checkbutton(gen, text='Tự mở khi bật máy', variable=self.startup) \
+            .grid(row=2, column=0, columnspan=3, sticky='w', pady=2)
 
-        ttk.Separator(body).grid(row=r + 5, column=0, columnspan=3, sticky='ew', pady=10)
-        ttk.Label(body, text='Sheet cookie FireAnt (tuỳ chọn)', font=('Segoe UI', 9, 'bold')) \
-            .grid(row=r + 6, column=0, columnspan=3, sticky='w')
-        ttk.Label(body, text='Dán link Google Sheet có cookie FireAnt ở ô D2 sheet "Dashboard" → cột MA lấy '
-                             'thẳng FireAnt.\nĐể trống → MA tự tính từ VNDirect.', foreground='#666') \
-            .grid(row=r + 7, column=0, columnspan=3, sticky='w', pady=(2, 4))
-        self.sheet = ttk.Entry(body, width=70)
+        ttk.Separator(side).pack(fill='x', pady=12)
+        ttk.Label(side, text='Sheet cookie FireAnt (tuỳ chọn)', font=('Segoe UI', 9, 'bold')).pack(anchor='w')
+        ttk.Label(side, text='Dán link Google Sheet có cookie FireAnt ở ô D2 sheet "Dashboard" → cột MA lấy '
+                             'thẳng FireAnt. Để trống → MA tự tính từ VNDirect.', foreground='#666',
+                  wraplength=390, justify='left').pack(anchor='w', pady=(2, 4))
+        self.sheet = ttk.Entry(side, width=52)
         self.sheet.insert(0, cfg.get('cookieSheetId') or '')
-        self.sheet.grid(row=r + 8, column=0, columnspan=3, sticky='ew')
+        self.sheet.pack(fill='x')
 
-        btns = ttk.Frame(body)
-        btns.grid(row=r + 9, column=0, columnspan=3, sticky='e', pady=(12, 0))
+        btns = ttk.Frame(outer)
+        btns.grid(row=1, column=0, columnspan=2, sticky='e', pady=(12, 0))
         ttk.Button(btns, text='Đóng', command=w.destroy).pack(side='right')
         ttk.Button(btns, text='Lưu', command=self.save).pack(side='right', padx=6)
         self.saved = ttk.Label(btns, text='', foreground='#16a34a')
@@ -1102,6 +1171,158 @@ class SettingsWindow:
             return
         self.app.alert([(name, syms or ['VIB', 'MBB'], mode)], names=len(self.crits) > 1)
 
+    # ── Điều kiện thêm (kiểu FireAnt): chọn nhóm → chọn điều kiện → đặt giá trị → ＋ Thêm ──
+    def build_extra(self, p):
+        """Bộ chọn trong cột phải: chọn nhóm → điều kiện → đặt giá trị → ＋ Thêm (điều kiện hiện ở danh sách bên trái)."""
+        ttk.Label(p, text='Thêm điều kiện', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        ttk.Label(p, text='Chọn nhóm → điều kiện → đặt giá trị → ＋ Thêm.\nĐiều kiện sẽ hiện ở danh sách bên trái.\n'
+                          'Cần lịch sử giá (RSI, MACD, SMA, đỉnh/đáy…): lần đầu dùng sẽ tải ~1 phút.',
+                  foreground='#666', wraplength=390, justify='left').pack(anchor='w', pady=(2, 6))
+        self.catalog = conditions.catalog()
+        self.group_ids = [g for g, _ in conditions.GROUPS]
+        self.grp_box = ttk.Combobox(p, state='readonly', width=44, values=[n for _, n in conditions.GROUPS])
+        self.grp_box.pack(anchor='w', pady=(4, 3))
+        self.grp_box.bind('<<ComboboxSelected>>', self.on_group)
+        self.cond_box = ttk.Combobox(p, state='readonly', width=44)
+        self.cond_box.pack(anchor='w')
+        self.cond_box.bind('<<ComboboxSelected>>', self.on_cond)
+        self.add_form = ttk.Frame(p)
+        self.add_form.pack(anchor='w', pady=(8, 0))
+        self.cond_items, self.form = [], None
+
+    def on_group(self, _=None):
+        self.cond_items = self.catalog[self.group_ids[self.grp_box.current()]]
+        self.cond_box['values'] = [t for t, _, _ in self.cond_items]
+        self.cond_box.set('')
+        self.clear_form()
+
+    def on_cond(self, _=None):
+        i = self.cond_box.current()
+        if i >= 0:
+            _, kind, key = self.cond_items[i]
+            self.build_form(kind, key)
+
+    def clear_form(self):
+        for w in self.add_form.winfo_children():
+            w.destroy()
+        self.form = None
+
+    def build_form(self, kind, key):
+        """Dựng ô nhập cho điều kiện vừa chọn: cột số → toán tử + giá trị (+ giá trị thứ hai); tín hiệu → các tham số."""
+        self.clear_form()
+        f = self.add_form
+        widgets = {}
+        n = 0                                   # số dòng ô nhập đã dựng
+        if kind == 'metric':
+            op = ttk.Combobox(f, state='readonly', width=14, values=[n_ for _, n_ in METRIC_OP_LABEL])
+            op.current(0)
+            op.grid(row=0, column=0, sticky='w', pady=2)
+            v1 = ttk.Entry(f, width=12)
+            v1.grid(row=0, column=1, sticky='w', padx=(6, 0))
+            unit = METRIC_UNIT.get(conditions.METRIC_FMT[key])
+            if unit:
+                ttk.Label(f, text=unit, foreground='#666').grid(row=0, column=2, sticky='w', padx=6)
+            to = ttk.Label(f, text='đến')
+            v2 = ttk.Entry(f, width=12)
+
+            def toggle(_=None):
+                if METRIC_OP_LABEL[op.current()][0] == 'bt':
+                    to.grid(row=1, column=0, sticky='e', pady=2)
+                    v2.grid(row=1, column=1, sticky='w', padx=(6, 0))
+                else:
+                    to.grid_remove()
+                    v2.grid_remove()
+            op.bind('<<ComboboxSelected>>', toggle)
+            widgets = (op, v1, v2)
+            n = 2
+        else:
+            for p in conditions.SIGNALS[key].params:
+                ttk.Label(f, text=p.name).grid(row=n, column=0, sticky='e', pady=2)
+                cb = ttk.Combobox(f, state='normal' if p.free else 'readonly', width=12,
+                                  values=[conditions.param_text(c) for c in p.choices])
+                cb.set(conditions.param_text(p.default))
+                cb.grid(row=n, column=1, sticky='w', padx=(6, 0))
+                widgets[p.id] = cb
+                n += 1
+        ttk.Button(f, text='＋ Thêm', command=self.add_condition).grid(row=n, column=0, columnspan=2, sticky='w', pady=(6, 0))
+        self.form = (kind, key, widgets)
+
+    def add_condition(self):
+        if not self.form:
+            return
+        kind, key, w = self.form
+        c = self.crits[self.cur]
+        if kind == 'metric':
+            op, v1, v2 = w
+            code = METRIC_OP_LABEL[op.current()][0]
+            try:
+                f = {'operator': code, 'value': float(v1.get().strip().replace(',', '.'))}
+                if code == 'bt':
+                    f['value2'] = float(v2.get().strip().replace(',', '.'))
+            except ValueError:
+                messagebox.showwarning(APP_NAME, 'Hãy nhập số vào ô giá trị.', parent=self.win)
+                return
+            c['filters'][key] = f                      # cùng một cột chỉ có 1 điều kiện — thêm lại là thay
+        else:
+            params = {}
+            for p in conditions.SIGNALS[key].params:
+                raw = w[p.id].get().strip()
+                if p.free:
+                    try:
+                        v = float(raw.replace(',', '.'))
+                    except ValueError:
+                        messagebox.showwarning(APP_NAME, f'"{p.name}" phải là số.', parent=self.win)
+                        return
+                    if not p.lo <= v <= p.hi:
+                        messagebox.showwarning(APP_NAME, f'"{p.name}" phải từ {conditions.param_text(p.lo)} '
+                                                         f'đến {conditions.param_text(p.hi)}.', parent=self.win)
+                        return
+                else:
+                    shown = [conditions.param_text(x) for x in p.choices]
+                    v = p.choices[shown.index(raw)] if raw in shown else p.default
+                params[p.id] = v
+            s = conditions.normalize_signal({'id': key, 'params': params})
+            if any(float(s['params'][k]) != float(v) for k, v in params.items() if not isinstance(v, str)):
+                messagebox.showwarning(APP_NAME, 'SMA ngắn phải ngắn hơn SMA dài.', parent=self.win)
+                return
+            sigs = c.setdefault('signals', [])
+            if s not in sigs:
+                sigs.append(s)
+        self.refresh_extra()
+        self.cond_box.set('')            # thêm xong → bỏ chọn, thấy rõ điều kiện đã sang danh sách bên trái
+        self.clear_form()
+
+    def refresh_extra(self):
+        for w in self.extra_list.winfo_children():
+            w.destroy()
+        c = self.crits[self.cur]
+        items = [(core.describe_filters({k: c['filters'][k]}), lambda k=k: self.drop_filter(k))
+                 for k in core.active_filter_keys(c['filters']) if k not in core.LEGACY_KEYS]
+        items += [(conditions.describe_signal(s), lambda i=i: self.drop_signal(i))
+                  for i, s in enumerate(c.get('signals') or [])]
+        if not items:
+            ttk.Label(self.extra_list, text='(chưa có — chọn ở cột bên phải)', foreground='#888').pack(anchor='w')
+        for text, cmd in items:
+            row = ttk.Frame(self.extra_list)
+            row.pack(fill='x')
+            x = ttk.Label(row, text='✕', foreground='#888', cursor='hand2', padding=(4, 1))
+            x.pack(side='left')
+            x.bind('<Button-1>', lambda e, c=cmd: c())
+            x.bind('<Enter>', lambda e, w=x: w.config(foreground='#dc2626'))
+            x.bind('<Leave>', lambda e, w=x: w.config(foreground='#888'))
+            ttk.Label(row, text=text, wraplength=480, justify='left').pack(side='left', padx=(4, 0))
+
+    def drop_filter(self, key):
+        self.crits[self.cur]['filters'].pop(key, None)
+        self.refresh_extra()
+
+    def drop_signal(self, i):
+        c = self.crits[self.cur]
+        del c['signals'][i]
+        if not c['signals']:
+            del c['signals']
+        self.refresh_extra()
+
     # ── Bản nháp tiêu chí ──
     def load_form(self):
         c = self.crits[self.cur]
@@ -1118,11 +1339,15 @@ class SettingsWindow:
             val.delete(0, 'end')
             if f.get('value') not in (None, ''):
                 val.insert(0, core.js_num(f['value']))
+        self.refresh_extra()
 
     def store_form(self):
         """Ghi ô đang sửa vào bản nháp. Trả False (và báo) nếu có ô không phải số."""
         name_to_op = {n: k for k, n in OP_LABEL}
-        filters, bad = {}, []
+        cur = self.crits[self.cur]
+        # Điều kiện thêm sửa thẳng trên bản nháp (không có ô cố định) → giữ nguyên
+        filters = {k: v for k, v in cur['filters'].items() if k not in core.LEGACY_KEYS}
+        bad = []
         for key, (op, val) in self.rows.items():
             raw = val.get().strip().replace(',', '.')
             if not raw:
@@ -1135,10 +1360,13 @@ class SettingsWindow:
             messagebox.showwarning(APP_NAME, 'Giá trị không phải số: ' + ', '.join(bad), parent=self.win)
             return False
         label_to_ex = {v: k for k, v in EXCHANGE_LABEL.items()}
-        self.crits[self.cur] = {'name': self.crit_name.get().strip() or f'Tiêu chí {self.cur + 1}',
-                                'exchange': label_to_ex.get(self.exchange.get(), 'HSX'),
-                                'filters': filters,
-                                'alert': self.alert_mode()}
+        new = {'name': self.crit_name.get().strip() or f'Tiêu chí {self.cur + 1}',
+               'exchange': label_to_ex.get(self.exchange.get(), 'HSX'),
+               'filters': filters,
+               'alert': self.alert_mode()}
+        if cur.get('signals'):
+            new['signals'] = cur['signals']
+        self.crits[self.cur] = new
         return True
 
     def switch(self, i):
@@ -1184,7 +1412,7 @@ class SettingsWindow:
             return
         label_to_col = {l: k for k, l in core.COLUMNS}
         self.app.apply_settings({
-            'criteria': [dict(c, filters=dict(c['filters'])) for c in self.crits],
+            'criteria': copy.deepcopy(self.crits),
             'sortColumn': label_to_col.get(self.sort_col.get(), 'value'),
             'sortDirection': 'asc' if self.sort_dir.get() == 'Tăng dần' else 'desc',
             'opacity': round(self.opacity.get(), 2),
@@ -1192,6 +1420,7 @@ class SettingsWindow:
         })
         self.app.hist['source'] = None   # đổi sheet → thử lại FireAnt ngay
         self.app.wake_hist.set()
+        self.app.wake_tech.set()         # vừa thêm điều kiện cần chỉ báo kỹ thuật → bắt đầu tải ngay
         if self.startup.get() != has_startup():
             if self.startup.get():
                 make_shortcut('Startup')

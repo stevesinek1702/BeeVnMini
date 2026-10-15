@@ -33,6 +33,7 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 |---|---|
 | Đặt / đổi bộ lọc, đổi sàn | Bấm **⚙** |
 | Thêm tiêu chí thứ 2, 3… | **⚙** → **＋ Thêm tiêu chí** → đặt tên + sàn + điều kiện → **Lưu**. Bảng giá hiện mỗi tiêu chí một khối (tên · sàn · số mã); đổi qua lại bằng ô *Tiêu chí*, bỏ bằng nút **Xoá** |
+| Thêm điều kiện kiểu FireAnt (RSI, MACD, giá cắt SMA/EMA, vượt đỉnh, KL dự kiến, nước ngoài mua ròng…) | **⚙** → cột **Điều kiện thêm** bên phải: chọn nhóm → chọn điều kiện → đặt giá trị → **＋ Thêm** (**✕** để bỏ). Có 16 điều kiện dạng con số (từ / đến / trong khoảng) và 35 tín hiệu có tham số; tất cả phải thoả cùng các ô lọc bên trái. Điều kiện cần lịch sử giá thì lần đầu mất ~1 phút để tải |
 | Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP xếp A → Z. Cột Sàn chỉ hiện ở chế độ đầy đủ |
 | Xem đủ cột / thu gọn | Bấm vào các hàng mã (hoặc nút ⤢) |
 | Dời chỗ (kể cả sang màn hình khác) | Giữ chuột vào thanh trên cùng (chỗ chữ Bee.vn) rồi kéo — lần sau mở lại đúng chỗ đó |
@@ -52,6 +53,9 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 |---|---|
 | Giá, Thay đổi, % Thay đổi, KLGD, GTGD, Lực cầu | FireAnt (công khai) — cùng nguồn bảng giá Bee.vn |
 | MA10, MA20, MA45, % KL/TB (KL hôm nay so với **trung bình 45 phiên**) | FireAnt TradingStatistic bằng cookie ở ô **D2** sheet *Dashboard* (sheet của anh Si, dùng chung; đổi / xoá trong ⚙) — số khớp y hệt web. Cookie hết hạn → tự tính từ lịch sử ngày VNDirect (mất ~1 phút sau khi mở). |
+
+| Điều kiện thêm cần lịch sử giá (RSI, MFI, MACD, Bollinger, SMA/EMA, đỉnh / đáy, số phiên tăng giảm, KLTB) | Tự tính từ nến ngày VNDirect (~1 năm), công thức chép từ bộ lọc FireAnt Screener. **Chỉ tải khi có tiêu chí dùng đến**, mỗi ngày một lần (~1 phút cho cả thị trường, lưu ở `tech.json`) |
+| % KL mua chủ động, nước ngoài mua ròng, KL dự kiến cả phiên | FireAnt (công khai), tính từ giá đang chạy |
 
 Ở chế độ đầy đủ, dòng trên bảng ghi rõ đang dùng nguồn nào: `MA: FireAnt` hoặc
 `MA: tự tính từ VNDirect (cookie FireAnt hết hạn)`. Cookie được làm mới trong sheet thì trong
@@ -99,8 +103,10 @@ Bấm đúp **`Go cai dat.bat`** (xoá biểu tượng Desktop + bỏ tự chạ
 | `beevn_mini.pyw` | Cửa sổ (tkinter), luồng lấy giá / lịch sử, cài đặt, tạo biểu tượng |
 | `speak.ps1` | Đọc to bằng giọng Windows — ưu tiên giọng tiếng Việt *Microsoft An*, máy không có thì đọc tiếng Anh |
 | `core.py` | Lấy dữ liệu, lọc / sắp xếp / định dạng giống bảng giá Bee.vn — không dính giao diện |
+| `conditions.py` | Danh mục điều kiện lọc kiểu FireAnt Screener (cột số + tín hiệu có tham số) và công thức đánh giá — không dính giao diện |
+| `tech.py` | Chỉ báo từ nến ngày (SMA/EMA, RSI, MFI, MACD, Bollinger, đỉnh đáy, số phiên tăng giảm) + KL dự kiến cả phiên |
 | `symbols.py` | ~1.600 mã HOSE/HNX/UPCoM — mã mới niêm yết thì thêm vào đây |
 | `tests/` | `python -m unittest discover -s tests -t .` |
 
 Chỉ dùng thư viện có sẵn của Python 3 (đã thử với 3.12). Cài đặt + bộ nhớ đệm nằm ở
-`%APPDATA%\BeeVnMini` (`config.json`, `hist.json`, `log.txt`).
+`%APPDATA%\BeeVnMini` (`config.json`, `hist.json`, `tech.json`, `log.txt`).

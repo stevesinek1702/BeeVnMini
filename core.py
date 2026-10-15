@@ -19,6 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
+import conditions
+import tech
+
 QUOTES_URL = 'https://www.fireant.vn/api/Data/Markets/Quotes?symbols='
 TRADING_STAT_URL = 'https://www.fireant.vn/api/Data/Markets/TradingStatistic'
 # Ô D2 sheet "Dashboard" — nơi cookie FireAnt được làm mới tự động. Đọc dạng CSV (sheet chia sẻ bằng link).
@@ -59,11 +62,12 @@ COLUMNS = [
     ('ma45', 'MA45'),
     ('demandStrength', 'Lực cầu'),
 ]
-LABEL = dict(COLUMNS)
+LABEL = {**dict(COLUMNS), **conditions.METRIC_LABEL}
 # Tiêu đề cột trên bảng mini — ghi gọn cho đỡ chiếm chỗ (Cài đặt / dòng mô tả lọc vẫn ghi đủ)
-HEAD_LABEL = {**LABEL, 'changePercent': '%'}
+HEAD_LABEL = {**LABEL, 'changePercent': '%', **conditions.METRIC_HEAD}
 FILTERABLE = [c for c in COLUMNS if c[0] != 'symbol']
-OPS = {'gt': '>', 'lt': '<', 'eq': '='}
+OPS ={'gt': '>', 'lt': '<', 'eq': '=', 'ge': '≥', 'le': '≤'}   # + 'bt' (trong khoảng value..value2)
+LEGACY_KEYS = {c[0] for c in FILTERABLE}    # cột có sẵn: thiếu số coi như 0 (y bảng giá web); cột mới: thiếu số thì loại
 
 
 # ── Thời gian ───────────────────────────────────────────────────────────
@@ -233,6 +237,38 @@ def fetch_all_history(symbols, today, done=None, on_progress=None):
     return done
 
 
+# Chỉ báo kỹ thuật (RSI, MFI, MACD, Bollinger, cắt SMA/EMA, đỉnh đáy 1 năm…) cần ~1 năm nến chứ không phải 70 phiên.
+TECH_DAYS = 420
+TECH_WORKERS = 8
+
+
+def fetch_tech(symbol, today):
+    to = int(time.time())
+    frm = to - TECH_DAYS * 86400
+    return tech.stats_from_bars(_get_json(f'{HISTORY_URL}&symbol={symbol}&from={frm}&to={to}', accept='*/*'),
+                                today, vn_date)
+
+
+def fetch_all_tech(symbols, today, done=None, on_progress=None):
+    """Thống kê kỹ thuật cho các mã còn thiếu. Mã không đủ dữ liệu → {} để khỏi thử lại mãi; lỗi mạng → bỏ trống."""
+    done = dict(done or {})
+    todo = [s for s in symbols if s not in done]
+
+    def one(sym):
+        try:
+            return sym, (fetch_tech(sym, today) or {})
+        except Exception:
+            return sym, None
+
+    with ThreadPoolExecutor(TECH_WORKERS) as ex:
+        for i, (sym, stats) in enumerate(ex.map(one, todo), 1):
+            if stats is not None:
+                done[sym] = stats
+            if on_progress and i % 50 == 0:
+                on_progress(len(done) / len(symbols))
+    return done
+
+
 # ── Đổi sang hàng bảng giá ──────────────────────────────────────────────
 
 def luc_cau(q):
@@ -245,7 +281,18 @@ def luc_cau(q):
     return None if lc > LUC_CAU_MAX else lc
 
 
-def transform_quote(q, hist=None):
+def quote_vn_date(q):
+    """Ngày (giờ VN) của quote FireAnt — trường Date là giờ UTC dạng ISO; None nếu thiếu / lạ."""
+    try:
+        d = datetime.fromisoformat(str(q.get('Date')).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(VN_TZ).strftime('%Y-%m-%d')
+
+
+def transform_quote(q, hist=None, tech_stats=None, now=None):
+    """Quote FireAnt → hàng bảng giá. hist = MA / KL trung bình; tech_stats = thống kê kỹ thuật (tech.py) của mã.
+    Hàng mang thêm '_tech' / '_live' để các điều kiện tín hiệu (conditions.py) tính; hai khoá này không hiện ra bảng."""
     h = hist or {}
     vol = q.get('TotalVolume') or 0
 
@@ -254,12 +301,14 @@ def transform_quote(q, hist=None):
 
     pct = q.get('PricePercentChange')
     tv = q.get('TotalValue')
-    return {
+    exchange = EXCHANGE_KEY.get(q.get('Exchange'), q.get('Exchange'))
+    price, change = k(q.get('PriceCurrent')), k(q.get('PriceChange'))
+    row = {
         'symbol': q.get('Symbol'),
         'name': q.get('Name') or '',
-        'exchange': EXCHANGE_KEY.get(q.get('Exchange'), q.get('Exchange')),
-        'price': k(q.get('PriceCurrent')),
-        'change': k(q.get('PriceChange')),
+        'exchange': exchange,
+        'price': price,
+        'change': change,
         'changePercent': float(_fixed(pct * 100, 2)) if pct else 0,
         'volume': q.get('TotalVolume'),
         'value': round(tv / 1e9 * 10) / 10 if tv else 0,
@@ -270,6 +319,16 @@ def transform_quote(q, hist=None):
         'ma45': h.get('ma45'),
         'demandStrength': luc_cau(q),
     }
+    row.update(conditions.quote_metrics(q))
+    row.update(conditions.tech_metrics(tech_stats or None, price, change))
+    now = now or vn_now()
+    # Quote của phiên cũ (cuối tuần, ngoài giờ) đã đủ cả phiên → không ngoại suy theo giờ hiện tại
+    est = (tech.estimated_volume(vol, exchange, now) if quote_vn_date(q) in (None, now.strftime('%Y-%m-%d'))
+           else (vol or None))
+    row['_tech'] = tech_stats or None
+    row['_live'] = {'last': price, 'high': k(q.get('PriceHigh')), 'low': k(q.get('PriceLow')),
+                    'volume': vol, 'est': est}
+    return row
 
 
 def group_by_exchange(rows):
@@ -291,7 +350,15 @@ def _num(v):
 
 
 def active_filter_keys(filters):
-    return [k for k, f in (filters or {}).items() if f and _num(f.get('value')) is not None]
+    """Các cột đang bị lọc: có giá trị (và với 'trong khoảng' thì có cả giá trị thứ hai)."""
+    out = []
+    for k, f in (filters or {}).items():
+        if k not in LABEL or not f or _num(f.get('value')) is None:
+            continue
+        if f.get('operator') == 'bt' and _num(f.get('value2')) is None:
+            continue
+        out.append(k)
+    return out
 
 
 def apply_filters(stocks, filters):
@@ -299,18 +366,39 @@ def apply_filters(stocks, filters):
     for key in active_filter_keys(filters):
         f = filters[key]
         val = _num(f['value'])
+        val2 = _num(f.get('value2'))
         op = f.get('operator')
+        legacy = key in LEGACY_KEYS
 
         def ok(s):
-            v = _num(s.get(key) or 0) or 0.0
+            if legacy:
+                v = _num(s.get(key) or 0) or 0.0       # y bảng giá web: thiếu số coi như 0
+            else:
+                v = _num(s.get(key))
+                if v is None:                           # cột mới (kiểu FireAnt): chưa tính được thì không khớp
+                    return False
             if op == 'gt':
                 return v > val
             if op == 'lt':
                 return v < val
             if op == 'eq':
                 return v == val
+            if op == 'ge':
+                return v >= val
+            if op == 'le':
+                return v <= val
+            if op == 'bt':
+                return min(val, val2) <= v <= max(val, val2)
             return True
         out = [s for s in out if ok(s)]
+    return out
+
+
+def apply_signals(stocks, signals):
+    """Giữ mã thoả TẤT CẢ tín hiệu (conditions.SIGNALS). Mã chưa có thống kê kỹ thuật thì không khớp."""
+    out = stocks
+    for sig in signals or []:
+        out = [s for s in out if conditions.eval_signal(sig, s.get('_tech'), s.get('_live'))]
     return out
 
 
@@ -337,14 +425,30 @@ def next_sort(cur_column, cur_direction, clicked):
 def select_matches(all_stocks, cfg):
     ex = cfg.get('exchange', 'HSX')
     pool = [s for e in EXCHANGES for s in all_stocks.get(e, [])] if ex == 'ALL' else all_stocks.get(ex, [])
-    return sort_stocks(apply_filters(pool, cfg.get('filters')),
-                       cfg.get('sortColumn') or 'value', cfg.get('sortDirection') or 'desc')
+    matched = apply_signals(apply_filters(pool, cfg.get('filters')), cfg.get('signals'))
+    return sort_stocks(matched, cfg.get('sortColumn') or 'value', cfg.get('sortDirection') or 'desc')
+
+
+def has_conditions(c):
+    """Tiêu chí có điều kiện nào đang bật không (cột có số, hoặc tín hiệu)."""
+    return bool(active_filter_keys(c.get('filters')) or c.get('signals'))
+
+
+def needs_tech(c):
+    """Tiêu chí có dùng điều kiện cần lịch sử ~1 năm (thống kê kỹ thuật) không — không thì khỏi tải."""
+    return bool(c.get('signals')) or any(k in conditions.TECH_METRIC_KEYS for k in active_filter_keys(c.get('filters')))
+
+
+def extra_columns(filters):
+    """Cột kiểu FireAnt đang bị lọc, theo thứ tự danh mục."""
+    active = set(active_filter_keys(filters))
+    return [(k, conditions.METRIC_LABEL[k]) for k in conditions.METRIC_KEYS if k in active]
 
 
 def compact_columns(filters):
-    """Chế độ thu gọn: Mã CP + các cột đang bị lọc, theo thứ tự bảng giá."""
+    """Chế độ thu gọn: Mã CP + các cột đang bị lọc, theo thứ tự bảng giá (cột kiểu FireAnt xếp sau)."""
     active = set(active_filter_keys(filters))
-    return [c for c in COLUMNS if c[0] == 'symbol' or c[0] in active]
+    return [c for c in COLUMNS if c[0] == 'symbol' or c[0] in active] + extra_columns(filters)
 
 
 def spell(symbol):
@@ -398,10 +502,14 @@ def criteria_from_config(cfg):
     out = []
     for i, c in enumerate(cfg.get('criteria') or [], 1):
         if isinstance(c, dict):
-            out.append({'name': (str(c.get('name') or '').strip() or f'Tiêu chí {i}'),
-                        'exchange': c.get('exchange') or 'HSX',
-                        'filters': dict(c.get('filters') or {}),
-                        'alert': alert_of(c)})
+            item = {'name': (str(c.get('name') or '').strip() or f'Tiêu chí {i}'),
+                    'exchange': c.get('exchange') or 'HSX',
+                    'filters': dict(c.get('filters') or {}),
+                    'alert': alert_of(c)}
+            signals = [s for s in map(conditions.normalize_signal, c.get('signals') or []) if s]
+            if signals:                      # tiêu chí không dùng tín hiệu thì giữ nguyên dạng cài đặt cũ
+                item['signals'] = signals
+            out.append(item)
     if not out:
         out = [{'name': 'Tiêu chí 1', 'exchange': cfg.get('exchange') or 'HSX',
                 'filters': dict(cfg.get('filters') or {}), 'alert': default_alert}]
@@ -410,7 +518,10 @@ def criteria_from_config(cfg):
 
 def criterion_key(c):
     """Nhận diện 1 tiêu chí theo nội dung (đổi tên không tính là đổi lọc → không báo "mã mới" giả)."""
-    return json.dumps([c.get('exchange'), c.get('filters')], sort_keys=True)
+    key = [c.get('exchange'), c.get('filters')]
+    if c.get('signals'):
+        key.append(c['signals'])
+    return json.dumps(key, sort_keys=True)
 
 
 def alert_text_groups(groups, limit=6, names=None):
@@ -442,15 +553,23 @@ EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
 def table_columns(cfg, full):
     """Cột hiện ra. Lọc cả 3 sàn thì chế độ ĐẦY ĐỦ có thêm cột Sàn sau Mã CP; chế độ thu gọn
     không hiện (anh Si: sàn chỉ là phạm vi lọc, bỏ cho gọn)."""
-    cols = list(COLUMNS) if full else compact_columns(cfg.get('filters'))
+    cols = list(COLUMNS) + extra_columns(cfg.get('filters')) if full else compact_columns(cfg.get('filters'))
+    if not full and cfg.get('signals'):
+        # Tín hiệu không có cột riêng → thu gọn vẫn cho thấy Giá và % để biết mã đang ở đâu
+        cols = [c for c in COLUMNS if c[0] in ('symbol', 'price', 'changePercent') or c in cols] + extra_columns(cfg.get('filters'))
     if full and cfg.get('exchange') == 'ALL':
         cols.insert(1, EXCHANGE_COL)
     return cols
 
 
-def describe_filters(filters):
-    return ' · '.join(f"{LABEL.get(k, k)} {OPS.get(filters[k].get('operator'), '?')} {js_num(filters[k]['value'])}"
-                      for k in active_filter_keys(filters))
+def describe_filters(filters, signals=None):
+    def one(k):
+        f = filters[k]
+        if f.get('operator') == 'bt':
+            return f"{LABEL.get(k, k)} từ {js_num(f['value'])} đến {js_num(f['value2'])}"
+        return f"{LABEL.get(k, k)} {OPS.get(f.get('operator'), '?')} {js_num(f['value'])}"
+    return ' · '.join([one(k) for k in active_filter_keys(filters)] +
+                      [conditions.describe_signal(s) for s in signals or []])
 
 
 # ── Định dạng (giống web) ───────────────────────────────────────────────
@@ -522,4 +641,27 @@ def format_cell(s, key):
             return '—', 'muted'
         txt = js_num(d) + '%'
         return txt, ('up' if d > 50 else ('down' if d < 50 else 'flat'))
+    fmt = conditions.METRIC_FMT.get(key)
+    if fmt:
+        return format_metric(s.get(key), fmt)
     return str(s.get(key, '')), ''
+
+
+def format_metric(v, fmt):
+    """Ô của các cột kiểu FireAnt (conditions.METRICS). Thiếu số → '--'."""
+    if v is None:
+        return '--', 'muted'
+    tone = 'up' if v > 0 else ('down' if v < 0 else 'flat')
+    if fmt == 'pct':
+        return ('+' if v > 0 else '') + _fixed(v, 2) + '%', tone
+    if fmt == 'pct0':
+        return _fixed(v, 0) + '%', ('up' if v > 50 else ('down' if v < 50 else 'flat'))
+    if fmt == 'int':
+        return str(int(v)), ''
+    if fmt == 'vol':
+        return format_volume(v), ''
+    if fmt == 'svol':
+        return ('+' if v > 0 else '-' if v < 0 else '') + format_volume(abs(v)), tone
+    if fmt == 'sbil':
+        return ('+' if v > 0 else '') + _fixed(v, 1) + ' tỷ', tone
+    return str(v), ''
