@@ -12,6 +12,7 @@ Lọc / sắp xếp / định dạng giữ y như bảng giá Bee.vn để số 
 """
 import json
 import math
+import re
 import time
 import urllib.error
 import urllib.request
@@ -432,6 +433,26 @@ def select_matches(all_stocks, cfg):
     return sort_stocks(matched, cfg.get('sortColumn') or 'value', cfg.get('sortDirection') or 'desc')
 
 
+WATCH_NAME = '★ Theo dõi'    # tên khối danh mục theo dõi trên bảng giá (cũng là khoá gập / số hàng / vị trí cuộn)
+
+
+def parse_symbols(text):
+    """'vib, mbb  VIB' → ['VIB', 'MBB']: chữ hoa, bỏ trùng, giữ thứ tự gõ. Nhận cả danh sách mã."""
+    if isinstance(text, (list, tuple)):
+        text = ' '.join(map(str, text))
+    out = []
+    for s in re.findall(r'[A-Za-z0-9]+', str(text or '')):
+        if s.upper() not in out:
+            out.append(s.upper())
+    return out
+
+
+def select_watch(rows, symbols, column='symbol', direction='asc'):
+    """Danh mục theo dõi: hàng bảng giá của các mã đã chọn (mã chưa có giá thì bỏ qua), xếp theo cột."""
+    by_symbol = {r['symbol']: r for r in rows if r.get('symbol')}
+    return sort_stocks([by_symbol[s] for s in symbols if s in by_symbol], column or 'symbol', direction or 'asc')
+
+
 def has_conditions(c):
     """Tiêu chí có điều kiện nào đang bật không (cột có số, hoặc tín hiệu)."""
     return bool(active_filter_keys(c.get('filters')) or c.get('signals'))
@@ -564,7 +585,13 @@ EXCHANGE_SHORT = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom'}
 
 def table_columns(cfg, full):
     """Cột hiện ra. Lọc cả 3 sàn thì chế độ ĐẦY ĐỦ có thêm cột Sàn sau Mã CP; chế độ thu gọn
-    không hiện (anh Si: sàn chỉ là phạm vi lọc, bỏ cho gọn)."""
+    không hiện (anh Si: sàn chỉ là phạm vi lọc, bỏ cho gọn).
+    Danh mục theo dõi (cfg['watch']): thu gọn chỉ Mã · Giá · %; đầy đủ cả bảng giá + cột Sàn (mã thuộc nhiều sàn)."""
+    if cfg.get('watch'):
+        cols = list(COLUMNS) if full else [c for c in COLUMNS if c[0] in ('symbol', 'price', 'changePercent')]
+        if full:
+            cols.insert(1, EXCHANGE_COL)
+        return cols
     cols = list(COLUMNS) + extra_columns(cfg.get('filters')) if full else compact_columns(cfg.get('filters'))
     if not full and cfg.get('signals'):
         # Tín hiệu không có cột riêng → thu gọn vẫn cho thấy Giá và % để biết mã đang ở đâu

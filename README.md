@@ -4,6 +4,8 @@ Chương trình nhỏ cho Windows (không phải extension). Cửa sổ bảng g
 chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 
 - **Nhiều tiêu chí**, mỗi tiêu chí nhiều điều kiện (phải thoả tất cả) và sàn riêng — mỗi tiêu chí một khối.
+- **★ Theo dõi:** danh mục mã anh tự chọn (không cần qua bộ lọc), hiện thành một khối riêng ở **cuối** bảng giá
+  (Mã · Giá · %; bấm vào bảng thì đủ cột + cột Sàn).
 - **1 mã = 1 hàng.** Nhiều mã thì cửa sổ dài thêm lên trên, giống chồng thông báo.
 - **Thu gọn:** chỉ *Mã CP* + các cột đang lọc (cột có chấm đỏ). **Bấm vào bảng** → đủ 11 cột như bảng giá Bee.vn.
 - Tự lấy giá **30 giây/lần** trong giờ giao dịch (8:45–15:15, thứ 2–6), ngoài giờ 10 phút/lần.
@@ -34,6 +36,7 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 | Đặt / đổi bộ lọc, đổi sàn | Bấm **⚙** |
 | Thêm tiêu chí thứ 2, 3… | **⚙** → **＋ Thêm tiêu chí** → đặt tên + sàn + điều kiện → **Lưu**. Bảng giá hiện mỗi tiêu chí một khối (tên · sàn · số mã); đổi qua lại bằng ô *Tiêu chí*, bỏ bằng nút **Xoá** |
 | Thêm điều kiện kiểu FireAnt (RSI, MACD, giá cắt SMA/EMA, vượt đỉnh, KL dự kiến, nước ngoài mua ròng…) | **⚙** → cột **Điều kiện thêm** bên phải: chọn nhóm → chọn điều kiện → đặt giá trị → **＋ Thêm** (**✕** để bỏ). Có 16 điều kiện dạng con số (từ / đến / trong khoảng) và 35 tín hiệu có tham số; tất cả phải thoả cùng các ô lọc bên trái. Điều kiện cần lịch sử giá thì lần đầu mất ~1 phút để tải |
+| Theo dõi một mã | **Chuột phải lên hàng của mã** (ở khối nào cũng được) → **★ Theo dõi**. Bỏ: chuột phải lên mã đó → **✕ Bỏ theo dõi**. Muốn gõ nhiều mã một lần: **⚙** → ô **★ Theo dõi** (cách nhau bằng dấu cách, vd `VIB MBB HPG`) → **Lưu**. Khối ★ Theo dõi xếp A → Z, bấm tiêu đề cột để đổi (vd `%` để thấy mã tăng mạnh nhất), gập / ＋ － như khối tiêu chí |
 | Sắp xếp | **Bấm tiêu đề cột** (▼ lớn → nhỏ; bấm lần nữa ▲ nhỏ → lớn). Mã CP xếp A → Z. Cột Sàn chỉ hiện ở chế độ đầy đủ |
 | Xem đủ cột / thu gọn | Bấm vào các hàng mã (hoặc nút ⤢) |
 | Dời chỗ (kể cả sang màn hình khác) | Giữ chuột vào thanh trên cùng (chỗ chữ Bee.vn) rồi kéo — lần sau mở lại đúng chỗ đó |
@@ -109,4 +112,4 @@ Bấm đúp **`Go cai dat.bat`** (xoá biểu tượng Desktop + bỏ tự chạ
 | `tests/` | `python -m unittest discover -s tests -t .` |
 
 Chỉ dùng thư viện có sẵn của Python 3 (đã thử với 3.12). Cài đặt + bộ nhớ đệm nằm ở
-`%APPDATA%\BeeVnMini` (`config.json`, `hist.json`, `tech.json`, `log.txt`).
+`%APPDATA%\BeeVnMini` (`config.json` — gồm cả danh mục theo dõi `watch`, `hist.json`, `tech.json`, `log.txt`).

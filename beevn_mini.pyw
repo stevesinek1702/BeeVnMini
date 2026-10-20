@@ -34,9 +34,10 @@ import conditions  # noqa: E402
 import core  # noqa: E402
 from symbols import SYMBOLS  # noqa: E402
 
+SYMBOL_SET = set(SYMBOLS)
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.5.1'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.6.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -73,6 +74,8 @@ DEFAULT_CONFIG = {
     'mode': 'compact',
     'anchor': None,       # [phải, dưới] của cửa sổ, tính bằng pixel màn hình
     'alert': 'speak',     # có mã mới lọt lọc: 'speak' đọc tên mã | 'beep' kêu ting | 'off' im lặng
+    'watch': [],          # danh mục theo dõi: các mã anh chọn, hiện thành khối "★ Theo dõi" dưới các tiêu chí
+    'watchSort': ['symbol', 'asc'],
     'opacity': 1.0,
     # Google Sheet có cookie FireAnt ở ô D2 sheet Dashboard. Anh Si cho mọi người dùng chung sheet này
     # (14/10/2026); xoá trống trong Cài đặt thì máy đó thôi dùng FireAnt, tự tính MA từ VNDirect.
@@ -229,6 +232,7 @@ class App:
             self.cfg['alert'] = 'off'
         # Nhiều tiêu chí lọc; cài đặt cũ (1 bộ lọc) tự thành "Tiêu chí 1"
         self.cfg['criteria'] = core.criteria_from_config(self.cfg)
+        self.cfg['watch'] = core.parse_symbols(self.cfg.get('watch'))
         self.speaker = None          # tiến trình đang đọc to
         self.pending_say = []        # mã mới đến lúc đang đọc dở → đọc tiếp sau
         self.hist = load_json(HIST_PATH, {})
@@ -243,6 +247,7 @@ class App:
         self.new_until = {}
         self.sections = []           # [(tiêu chí, [mã khớp])] — chỉ tiêu chí đã có điều kiện
         self.matches = []            # gộp mọi khối, không trùng mã
+        self.watch_block = None      # (khối "★ Theo dõi", [hàng]) — None khi chưa theo dõi mã nào / chưa có giá
         self.scroll_pos = {}          # {tên tiêu chí: vị trí cuộn 0..1} — giữ nguyên khi giá cập nhật
         self.q = queue.Queue()
         self.wake = threading.Event()
@@ -267,7 +272,6 @@ class App:
                             anchor='w', wraplength=300)
         self.msg.pack(fill='x', padx=8, pady=(0, 6))
 
-        self._build_menu()
         for w in (self.frame, self.table):
             w.bind('<MouseWheel>', self.on_wheel)
             w.bind('<Button-3>', self.show_menu)
@@ -323,8 +327,15 @@ class App:
             w.bind('<Button-3>', self.show_menu)
             w.config(cursor='fleur')
 
-    def _build_menu(self):
+    def _build_menu(self, sym=None):
+        """Menu chuột phải. Bấm lên hàng của một mã (sym) thì dòng đầu là theo dõi / bỏ theo dõi mã đó."""
         m = tk.Menu(self.root, tearoff=0)
+        if sym:
+            if sym in self.cfg['watch']:
+                m.add_command(label=f'✕ Bỏ theo dõi {sym}', command=lambda: self.toggle_watch(sym))
+            else:
+                m.add_command(label=f'★ Theo dõi {sym}', command=lambda: self.toggle_watch(sym))
+            m.add_separator()
         m.add_command(label='Thu gọn / đầy đủ', command=self.toggle_mode)
         m.add_command(label='Tải lại ngay', command=self.refresh_now)
         m.add_command(label='Cài đặt bộ lọc…', command=self.open_settings)
@@ -342,7 +353,7 @@ class App:
             m.add_command(label=f'Kiểm tra cập nhật (đang dùng v{APP_VERSION})', command=self.check_update_now)
             m.add_command(label='Gỡ khỏi máy…', command=self.uninstall)
         m.add_command(label='Tắt chương trình', command=self.quit)
-        self.menu = m
+        return m
 
     def set_exchange(self, key):
         crits = [dict(c) for c in self.cfg['criteria']]
@@ -360,8 +371,28 @@ class App:
         except Exception:
             log('taskbar: ' + traceback.format_exc())
 
-    def show_menu(self, e):
+    def show_menu(self, e, sym=None):
+        # Dựng menu mới mỗi lần bấm: dòng đầu theo mã vừa bấm, mục "Sàn" theo số tiêu chí hiện tại
+        old, self.menu = getattr(self, 'menu', None), self._build_menu(sym)
+        if old is not None:
+            old.destroy()
         self.menu.tk_popup(e.x_root, e.y_root)
+
+    def toggle_watch(self, sym):
+        """Thêm / bỏ một mã khỏi danh mục theo dõi (chuột phải lên hàng của mã)."""
+        watch = [s for s in self.cfg['watch'] if s != sym]
+        if len(watch) == len(self.cfg['watch']):
+            watch.append(sym)
+        self.cfg['watch'] = watch
+        save_json(CONFIG_PATH, self.cfg)
+        self.compute()
+        self.render()
+
+    def watch_crit(self):
+        """Danh mục theo dõi dưới dạng 1 "tiêu chí" không có điều kiện → dùng chung cách vẽ khối và xếp cột."""
+        col, direction = self.cfg.get('watchSort') or ('symbol', 'asc')
+        return {'name': core.WATCH_NAME, 'exchange': 'ALL', 'filters': {}, 'watch': True,
+                'sortColumn': col, 'sortDirection': direction}
 
     def compute(self):
         """Lọc lại từ giá mới nhất + lịch sử cho từng tiêu chí; đánh dấu mã mới lọt lọc."""
@@ -372,6 +403,10 @@ class App:
         rows = [core.transform_quote(q, data.get(q.get('Symbol')), tech.get(q.get('Symbol'))) for q in self.quotes]
         all_stocks = core.group_by_exchange(rows)
         sort = {'sortColumn': self.cfg.get('sortColumn'), 'sortDirection': self.cfg.get('sortDirection')}
+
+        wc = self.watch_crit()
+        mine = core.select_watch(rows, self.cfg['watch'], wc['sortColumn'], wc['sortDirection'])
+        self.watch_block = (wc, mine) if mine else None
 
         self.sections, seen, flat = [], set(), []
         for c in self.cfg['criteria']:
@@ -471,17 +506,26 @@ class App:
         full = cfg['mode'] == 'full'
         crits = cfg['criteria']
         sections = self.sections if self.quotes is not None else []
-        multi = len([c for c in crits if core.has_conditions(c)]) > 1
-        has_filter = any(core.has_conditions(c) for c in crits)
+        watch = self.watch_block if self.quotes is not None else None
+        n_crit = len([c for c in crits if core.has_conditions(c)])
+        has_filter = n_crit > 0
+        # Nhiều khối (tiêu chí + danh mục theo dõi) → mỗi khối có dòng tên để gập / mở. Danh mục theo dõi nằm cuối,
+        # sát góc dưới-phải: kết quả lọc dài / ngắn đi thì danh mục không bị nhảy chỗ.
+        blocks = sections + ([watch] if watch else [])
+        multi = n_crit + (1 if watch else 0) > 1
 
         # Dòng trạng thái: sàn (hoặc số tiêu chí) · số mã · giờ cập nhật
-        if multi:
+        if n_crit > 1:
             parts = [f'{len(sections) or len(crits)} tiêu chí']
-        else:
+        elif has_filter or not self.cfg['watch']:
             first = next((c for c in crits if core.has_conditions(c)), crits[0])
             parts = [EXCHANGE_LABEL.get(first['exchange'], first['exchange'])]
+        else:
+            parts = [core.WATCH_NAME]
         if has_filter and self.quotes is not None:
             parts.append(f'{len(self.matches)} mã')
+        elif watch:
+            parts.append(f'{len(watch[1])} mã')
         if self.fetched_at:
             parts.append(time.strftime('%H:%M:%S', time.localtime(self.fetched_at)))
         stale = self.error or (self.fetched_at and core.is_trading_time()
@@ -489,7 +533,7 @@ class App:
         self.meta.config(text=' · '.join(parts), fg='#eab308' if stale else MUTED)
 
         # Dòng dưới thanh tiêu đề (chế độ đầy đủ): 1 tiêu chí → mô tả lọc + nguồn MA; nhiều → chỉ nguồn MA
-        if full and has_filter:
+        if full and (has_filter or watch):
             text = self.ma_source_note()
             if self.tech_pending():
                 text += '   ·   ' + self.tech_note()
@@ -503,7 +547,7 @@ class App:
         # Bảng: mỗi tiêu chí một khối. Dựng khung mới (chưa hiện) rồi mới tháo khung cũ → một lần vẽ, không nháy.
         total = sum(len(m) for _, m in sections)
         body = tk.Frame(self.table, bg=BG)
-        built = [self._build_section(body, c, m, full, multi) for c, m in sections]
+        built = [self._build_section(body, c, m, full, multi) for c, m in blocks]
         self._align_sections(built)
         if self.table_body is not None:
             self.table_body.destroy()
@@ -518,11 +562,12 @@ class App:
             msg, color = 'Đang tải giá…', MUTED
         elif self.error and self.quotes is None:
             msg, color = f'{self.error}. Sẽ tự thử lại — kiểm tra mạng Internet.', '#fca5a5'
-        elif not has_filter:
-            msg, color = 'Chưa có bộ lọc. Bấm ⚙ để đặt lọc\n(vd Giá < 20, % Thay đổi > 2).', MUTED
+        elif not has_filter and not self.cfg['watch']:
+            msg, color = ('Chưa có bộ lọc. Bấm ⚙ để đặt lọc\n(vd Giá < 20, % Thay đổi > 2), '
+                          'hoặc gõ mã vào ô ★ Theo dõi.'), MUTED
         elif total == 0 and self.tech_pending():
             msg, color = self.tech_note().capitalize() + '…', MUTED
-        elif not multi and total == 0:
+        elif has_filter and not multi and total == 0:
             msg, color = 'Chưa có mã nào khớp bộ lọc.', MUTED
         else:
             msg, color = '', MUTED
@@ -549,9 +594,9 @@ class App:
         if multi:
             bar = tk.Frame(box, bg=SECTION)
             bar.pack(fill='x', pady=(2, 0))
-            ex = EXCHANGE_LABEL.get(c['exchange'], c['exchange'])
+            ex = '' if c.get('watch') else EXCHANGE_LABEL.get(c['exchange'], c['exchange']) + '  ·  '
             more = f'  ·  lăn ↕ xem đủ' if (not collapsed and len(matches) > limit) else ''
-            title = tk.Label(bar, text=f'{"▸" if collapsed else "▾"} {name}  ·  {ex}  ·  {len(matches)} mã{more}',
+            title = tk.Label(bar, text=f'{"▸" if collapsed else "▾"} {name}  ·  {ex}{len(matches)} mã{more}',
                              bg=SECTION, fg=GOLD, font=('Segoe UI', 8, 'bold'), anchor='w', padx=8, cursor='hand2')
             title.pack(side='left', fill='x', expand=True)
             title.bind('<Button-1>', lambda e: self.toggle_section(name))
@@ -566,7 +611,7 @@ class App:
                     b.bind('<Leave>', lambda e, w=b: w.config(fg=MUTED))
             if collapsed:
                 return info
-            if full:
+            if full and not c.get('watch'):
                 d = tk.Label(box, text=core.describe_filters(c['filters'], c.get('signals')), bg=BG, fg=MUTED,
                              font=FONT_SMALL, anchor='w', padx=8, wraplength=420, justify='left')
                 d.pack(fill='x')
@@ -627,7 +672,7 @@ class App:
                                font=FONT_BOLD if key == 'symbol' else FONT,
                                anchor='w' if ci == 0 else 'e', padx=8)
                 lbl.grid(row=ri, column=ci, sticky='ew')
-                self._bind_table(lbl)
+                self._bind_table(lbl, st['symbol'])      # chuột phải lên hàng: theo dõi / bỏ theo dõi mã này
                 if wheel:
                     lbl.bind('<MouseWheel>', wheel)
                 row_cells.append((ci, lbl))
@@ -679,10 +724,10 @@ class App:
         save_json(CONFIG_PATH, self.cfg)
         self.render()
 
-    def _bind_table(self, w):
+    def _bind_table(self, w, sym=None):
         w.bind('<Button-1>', lambda e: self.toggle_mode())
         w.bind('<MouseWheel>', self.on_wheel)
-        w.bind('<Button-3>', self.show_menu)
+        w.bind('<Button-3>', lambda e: self.show_menu(e, sym))
         w.config(cursor='hand2')
 
     def fit(self):
@@ -713,7 +758,9 @@ class App:
     def sort_by(self, key, crit):
         """Bấm tiêu đề cột: chỉ đổi cách xếp của tiêu chí đó, các tiêu chí khác giữ nguyên."""
         crit['sortColumn'], crit['sortDirection'] = core.next_sort(*self.sort_of(crit), key)
-        save_json(CONFIG_PATH, self.cfg)           # crit chính là phần tử trong cfg['criteria']
+        if crit.get('watch'):
+            self.cfg['watchSort'] = [crit['sortColumn'], crit['sortDirection']]
+        save_json(CONFIG_PATH, self.cfg)           # tiêu chí thường: crit chính là phần tử trong cfg['criteria']
         self.scroll_pos.pop(crit['name'], None)    # xếp lại thì khối đó về đầu; khối khác giữ vị trí cuộn
         self.compute()
         self.render()
@@ -795,7 +842,6 @@ class App:
     def apply_settings(self, new_cfg):
         self.cfg.update(new_cfg)
         self.cfg['criteria'] = core.criteria_from_config(self.cfg)
-        self._build_menu()            # số tiêu chí đổi → menu đổi sàn nhanh có/không
         self.root.attributes('-alpha', self.cfg.get('opacity', 1.0))
         save_json(CONFIG_PATH, self.cfg)
         self.scroll_pos = {}
@@ -1126,6 +1172,16 @@ class SettingsWindow:
         self.build_extra(side)
         self.load_form()
 
+        # Danh mục theo dõi: một ô gõ mã, cách nhau bằng dấu cách (chuột phải lên bảng giá cũng thêm / bớt được)
+        ttk.Separator(side).pack(fill='x', pady=12)
+        ttk.Label(side, text='★ Theo dõi', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        ttk.Label(side, text='Gõ mã cách nhau bằng dấu cách (vd VIB MBB HPG) → hiện thành khối riêng trên bảng giá.\n'
+                             'Hoặc chuột phải lên một mã trên bảng giá → ★ Theo dõi.',
+                  foreground='#666', wraplength=390, justify='left').pack(anchor='w', pady=(2, 4))
+        self.watch = ttk.Entry(side, width=52)
+        self.watch.insert(0, ' '.join(cfg['watch']))
+        self.watch.pack(fill='x')
+
         # Cài đặt chung nằm cột phải, dưới bộ chọn → cửa sổ không cao thêm khi danh sách bên trái dài ra
         ttk.Separator(side).pack(fill='x', pady=12)
         gen = ttk.Frame(side)
@@ -1425,8 +1481,17 @@ class SettingsWindow:
         if sheet_raw and not sheet:
             messagebox.showwarning(APP_NAME, 'Không nhận ra link Google Sheet.', parent=self.win)
             return
+        watch = core.parse_symbols(self.watch.get())
+        unknown = [s for s in watch if s not in SYMBOL_SET]
+        if unknown:
+            messagebox.showwarning(APP_NAME, 'Không có mã: ' + ', '.join(unknown) + '\nKiểm tra lại ô ★ Theo dõi.',
+                                   parent=self.win)
+            return
+        self.watch.delete(0, 'end')
+        self.watch.insert(0, ' '.join(watch))           # gõ thường / thừa dấu → hiện lại gọn
         self.app.apply_settings({
             'criteria': copy.deepcopy(self.crits),
+            'watch': watch,
             'opacity': round(self.opacity.get(), 2),
             'cookieSheetId': sheet,
         })

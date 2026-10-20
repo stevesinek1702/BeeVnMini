@@ -159,6 +159,29 @@ class LocGiongWeb(unittest.TestCase):
     def test_mo_ta_bo_loc(self):
         self.assertEqual(core.describe_filters(FILTERS), 'Giá < 20 · % Thay đổi > 2 · KLGD > 1000000')
 
+    def test_danh_muc_theo_doi(self):
+        # Gõ thường, thừa dấu, trùng mã → gọn lại, giữ thứ tự gõ
+        self.assertEqual(core.parse_symbols(' vib, mbb;;VIB  hpg\n'), ['VIB', 'MBB', 'HPG'])
+        self.assertEqual(core.parse_symbols(['vib', 'VIB', 'fpt']), ['VIB', 'FPT'])      # đọc được cả danh sách trong cài đặt
+        self.assertEqual(core.parse_symbols(None), [])
+        rows = [VIB, FPT, HPG]
+        # Mã chưa có giá (hoặc đã huỷ niêm yết) bị bỏ qua, không vỡ; mặc định xếp A → Z
+        self.assertEqual([s['symbol'] for s in core.select_watch(rows, ['HPG', 'XYZ', 'VIB'])], ['HPG', 'VIB'])
+        self.assertEqual([s['symbol'] for s in core.select_watch(rows, ['HPG', 'FPT', 'VIB'], 'changePercent', 'desc')],
+                         ['VIB', 'HPG', 'FPT'])
+        self.assertEqual(core.select_watch(rows, []), [])
+        # Mã thuộc mọi sàn (không bị lọc theo sàn như tiêu chí): hàng của sàn nào cũng lên
+        hnx = {**FPT, 'exchange': 'HNX'}
+        self.assertEqual([s['symbol'] for s in core.select_watch([{**VIB, 'exchange': 'HSX'}, hnx], ['FPT', 'VIB'])],
+                         ['FPT', 'VIB'])
+        # Cột: thu gọn chỉ Mã · Giá · %; đầy đủ cả bảng giá + cột Sàn
+        wc = {'name': core.WATCH_NAME, 'exchange': 'ALL', 'filters': {}, 'watch': True}
+        self.assertEqual([c[0] for c in core.table_columns(wc, False)], ['symbol', 'price', 'changePercent'])
+        full = [c[0] for c in core.table_columns(wc, True)]
+        self.assertEqual((full[:2], len(full)), (['symbol', 'exchange'], 12))
+        # Danh mục theo dõi không phải điều kiện lọc: không làm tiêu chí nào "có điều kiện"
+        self.assertFalse(core.has_conditions(wc))
+
     def test_gio_giao_dich_theo_gio_vn(self):
         ts = lambda y, mo, d, h, mi: calendar.timegm((y, mo, d, h, mi, 0))
         self.assertTrue(core.is_trading_time(ts(2026, 10, 14, 3, 0)))    # thứ Tư 10:00 VN
