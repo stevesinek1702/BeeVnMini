@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Bee.vn mini (thử nghiệm)",
+  "version": "0.1.0",
+  "description": "Bản thử: bảng giá nổi bằng Document Picture-in-Picture, tự cập nhật 30 s, đọc mã bằng giọng Việt.",
+  "minimum_chrome_version": "120",
+  "permissions": ["alarms", "tts", "sidePanel"],
+  "host_permissions": [
+    "https://www.fireant.vn/*",
+    "https://dchart-api.vndirect.com.vn/*"
+  ],
+  "background": { "service_worker": "sw.js" },
+  "action": { "default_title": "Mở bảng Bee.vn mini (thử nghiệm)" },
+  "side_panel": { "default_path": "board.html?panel=1" }
+}
