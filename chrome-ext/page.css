@@ -1,0 +1,31 @@
+/* Trang chính trong tab (bảng giá + cài đặt). Bảng giá dùng board.css. */
+body.page { padding: 10px 18px 30px; }
+.top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.top h1 { font-size: 18px; font-weight: normal; margin: 0; }
+.top h1 b { color: var(--gold); }
+.hint { color: var(--muted); font-size: 12px; }
+.tip { margin: 6px 0 10px; }
+main { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+#boardHost { border: 1px solid var(--line); flex: none; }
+#settings { flex: 1; min-width: 560px; max-width: 980px; }
+#settings h2 { font-size: 15px; margin: 0 0 6px; }
+#settings h3 { font-size: 13px; margin: 14px 0 4px; }
+#settings .cols { display: flex; gap: 28px; flex-wrap: wrap; }
+#settings .left, #settings .right { flex: 1; min-width: 300px; }
+#settings .grid { display: grid; grid-template-columns: 120px auto 1fr; gap: 4px 8px; align-items: center; margin: 6px 0; }
+#settings .grid label { color: var(--text); white-space: nowrap; }
+#settings .grid button, #settings .grid select + select { justify-self: start; }
+#settings .row { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+#settings .row label { min-width: 120px; }
+#settings .wide { width: 100%; box-sizing: border-box; margin: 3px 0; }
+#settings hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+#settings .cond { display: flex; gap: 6px; padding: 2px 0; }
+#settings .cond .x { color: var(--muted); cursor: pointer; padding: 0 4px; }
+#settings .cond .x:hover { color: #dc2626; }
+#settings .btns { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 14px; }
+#s-saved { color: #16a34a; }
+input, select, button { font: inherit; background: var(--head); color: var(--text); border: 1px solid var(--line);
+  border-radius: 4px; padding: 3px 6px; }
+button { cursor: pointer; } button:hover { border-color: var(--accent); }
+button.main { border-color: var(--gold); color: var(--gold); }
+code { color: var(--accent); }

@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "description": "Chỉ để Node chạy test (node --test). Chrome bỏ qua file này.",
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

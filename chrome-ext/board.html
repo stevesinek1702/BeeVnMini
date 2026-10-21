@@ -1,49 +1,24 @@
 <!doctype html>
-<html lang="vi">
+<html lang="vi" translate="no">
 <head>
 <meta charset="utf-8">
-<title>Bee.vn mini (thử nghiệm)</title>
+<meta name="google" content="notranslate">
+<title>Bee.vn mini</title>
 <link rel="stylesheet" href="board.css">
+<link rel="stylesheet" href="page.css">
 </head>
-<body>
-<h1><b>Bee</b>.vn mini <small>— bản thử Chrome extension</small></h1>
-
-<section>
-  <label>Mã: <input id="symbols" size="48" value="VIB MBB HPG GEX FPT SSI VND TCB ACB VNM"></label>
-  <button id="apply">Áp dụng</button>
-  <div id="preview"></div>
-</section>
-
-<section class="row">
-  <button id="pip" class="main">Mở cửa sổ nổi (PiP)</button>
-  <button id="panel">Mở side panel</button>
-  <label>Hẹn giờ:
-    <select id="timer">
-      <option value="alarms">chrome.alarms 30 s</option>
-      <option value="interval">setInterval 30 s</option>
-    </select>
-  </label>
-  <button id="now">Cập nhật ngay</button>
-</section>
-
-<section class="row">
-  <label>Đọc: <input id="say" size="12" value="G E X"></label>
-  <button id="tts">chrome.tts</button>
-  <button id="speech">Web Speech</button>
-  <button id="gtts" title="Endpoint không chính thức của Google Dịch — chỉ để so sánh">Google Dịch (dự phòng)</button>
-</section>
-
-<h2>Kết quả kiểm tra</h2>
-<table id="checks">
-  <tr data-k="fireant"><th>1a. Giá FireAnt</th><td>…</td></tr>
-  <tr data-k="vndirect"><th>1b. Nến VNDirect</th><td>…</td></tr>
-  <tr data-k="pip"><th>2. Cửa sổ nổi PiP</th><td>chưa mở — bấm nút “Mở cửa sổ nổi”</td></tr>
-  <tr data-k="timer"><th>3. Tự cập nhật</th><td>…</td></tr>
-  <tr data-k="tts"><th>4. Giọng đọc</th><td>…</td></tr>
-</table>
-<pre id="log"></pre>
-
-<script src="lib.js"></script>
-<script src="board.js"></script>
+<body class="page">
+<header class="top">
+  <h1><b>Bee</b>.vn mini</h1>
+  <button id="openPip" class="main" title="Cửa sổ nhỏ luôn nổi trên mọi cửa sổ (Excel, Zalo…). Đóng tab này thì cửa sổ nổi đóng theo.">Mở cửa sổ nổi</button>
+  <span id="status" class="hint"></span>
+</header>
+<p class="hint tip">Giữ tab này mở (đã ghim sẵn) — cửa sổ nổi sống theo tab. Bấm vào bảng: thu gọn / đầy đủ · bấm tiêu đề cột: sắp xếp ·
+  chuột phải lên một mã: ★ Theo dõi, quét lại trendline…</p>
+<main>
+  <section id="boardHost"></section>
+  <section id="settings"></section>
+</main>
+<script type="module" src="app.js"></script>
 </body>
 </html>
