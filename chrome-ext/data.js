@@ -1,4 +1,5 @@
-// Lấy dữ liệu: giá FireAnt, nến ngày VNDirect. host_permissions trong manifest cho gọi thẳng, không vướng CORS.
+// Lấy dữ liệu: giá FireAnt (cần host_permissions — FireAnt không mở CORS), nến ngày VNDirect (máy chủ trả
+// Access-Control-Allow-Origin: * nên gọi thẳng được, khỏi khai báo quyền → không hiện trong mục Site access).
 import { histStats } from './lib/core.js';
 
 export const QUOTES_URL = 'https://www.fireant.vn/api/Data/Markets/Quotes?symbols=';
