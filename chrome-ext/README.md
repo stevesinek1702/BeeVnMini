@@ -58,6 +58,7 @@ tính từ nến ngày VNDirect mỗi ngày một lần (~30 giây). Chỉ báo 
 | `settings.js` | Cài đặt bộ lọc |
 | `data.js`, `techworker.js` | Gọi FireAnt / VNDirect; luồng phụ tính chỉ báo |
 | `sw.js` | Hẹn giờ 30 giây (`chrome.alarms`), nút trên thanh công cụ |
+| `icons/` | Logo con ong / tổ ong (`logo.svg`, bản rút gọn `logo-small.svg`, icon PNG 16–128; vẽ lại bằng `ve-logo.py`) |
 | `tests/` | `node --test` (69 test, chép từ `tests/` của bản Python) |
 
 Đã đối chiếu với bản Python 1.7.0 trên nến thật cả thị trường (21–22/10/2026): 1.191.909 con số thống kê

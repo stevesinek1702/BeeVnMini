@@ -558,6 +558,10 @@ class App {
     st.textContent = this.cssText;
     w.document.head.appendChild(st);
     w.document.title = 'Bee.vn';
+    const icon = w.document.createElement('link');
+    icon.rel = 'icon';
+    icon.href = chrome.runtime.getURL('icons/icon32.png');
+    w.document.head.appendChild(icon);
     w.document.body.className = 'pip';
     this.pip = w;
     this.pipView = new BoardView(w.document, w.document.body, this.actions(), { pip: true });

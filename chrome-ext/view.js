@@ -4,6 +4,8 @@
 import * as core from './lib/core.js';
 
 const ROW_H = 20, HEAD_H = 20;
+// Đường dẫn tuyệt đối: trong cửa sổ PiP (about:blank) đường dẫn tương đối không trỏ về extension
+const LOGO = chrome.runtime.getURL('icons/logo-small.svg');   // bản rút gọn cho cỡ 16 px
 
 export class BoardView {
   // actions: toggleMode, refresh, settings, sortBy(key, crit), toggleSection(name), resizeSection(name, d, n),
@@ -19,7 +21,8 @@ export class BoardView {
     this.root = d.createElement('div');
     this.root.className = 'board';
     this.root.innerHTML =
-      '<div class="b-head"><span class="brand"><b>Bee</b><span>.vn</span></span><span class="meta"></span>' +
+      `<div class="b-head"><img class="logo" src="${LOGO}" alt=""><span class="brand"><b>Bee</b><span>.vn</span></span>` +
+      '<span class="meta"></span>' +
       '<span class="btn" data-act="refresh" title="Tải lại ngay">↻</span>' +
       '<span class="btn" data-act="mode" title="Thu gọn / đầy đủ">⤢</span>' +
       (pip ? '<span class="btn" data-act="settings" title="Cài đặt bộ lọc (mở tab Bee.vn)">⚙</span>' : '') +

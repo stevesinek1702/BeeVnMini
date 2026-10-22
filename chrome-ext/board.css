@@ -13,6 +13,7 @@ body.pip { overflow: auto; }
 body.pip .board { display: inline-block; min-width: 100%; box-sizing: border-box; }
 
 .b-head { display: flex; align-items: center; background: var(--head); padding: 3px 4px 3px 8px; white-space: nowrap; }
+.b-head .logo { width: 16px; height: 16px; margin-right: 5px; flex: none; }
 .b-head .brand b { color: var(--gold); } .b-head .brand span { font-weight: normal; }
 .b-head .meta { color: var(--muted); font-size: 12px; margin: 0 10px 0 6px; flex: 1; }
 .b-head .meta.stale { color: var(--flat); }

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<!-- Logo BeeMini: tổ ong; 3 ô mật xếp chéo đi lên (giá tăng) thành con ong — ô trên cùng là đầu -->
+<defs>
+<linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff1b8"/><stop offset=".35" stop-color="#fbbf24"/><stop offset="1" stop-color="#c2410c"/></linearGradient>
+<radialGradient id="body" cx=".5" cy=".38" r=".7"><stop offset="0" stop-color="#262650"/><stop offset="1" stop-color="#11112a"/></radialGradient>
+<linearGradient id="honey" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fffbe6"/><stop offset=".5" stop-color="#fcd34d"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+<clipPath id="c2"><polygon points="64.00,50.00 76.12,57.00 76.12,71.00 64.00,78.00 51.88,71.00 51.88,57.00"/></clipPath><clipPath id="c3"><polygon points="45.00,67.00 57.12,74.00 57.12,88.00 45.00,95.00 32.88,88.00 32.88,74.00"/></clipPath>
+</defs>
+<polygon points="64.00,7.00 113.36,35.50 113.36,92.50 64.00,121.00 14.64,92.50 14.64,35.50" fill="url(#body)" stroke="url(#rim)" stroke-width="10" stroke-linejoin="round"/>
+<polygon points="64.00,15.00 106.44,39.50 106.44,88.50 64.00,113.00 21.56,88.50 21.56,39.50" fill="none" stroke="#fde68a" stroke-opacity=".18" stroke-width="2" stroke-linejoin="round"/>
+<path d="M80.0,34.5 q-1.5,-6 -6.5,-8.5" fill="none" stroke="#fcd34d" stroke-width="3.4" stroke-linecap="round"/>
+<circle cx="73.5" cy="26.0" r="3.7" fill="#fde68a"/>
+<path d="M86.0,34.5 q1.5,-6 6.5,-8.5" fill="none" stroke="#fcd34d" stroke-width="3.4" stroke-linecap="round"/>
+<circle cx="92.5" cy="26.0" r="3.7" fill="#fde68a"/>
+<polygon points="83.00,33.00 95.12,40.00 95.12,54.00 83.00,61.00 70.88,54.00 70.88,40.00" fill="url(#honey)" stroke="#b45309" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="64.00,50.00 76.12,57.00 76.12,71.00 64.00,78.00 51.88,71.00 51.88,57.00" fill="url(#honey)" stroke="#b45309" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="61.48,55.60 65.36,57.84 65.36,62.32 61.48,64.56 57.60,62.32 57.60,57.84" fill="#ffffff" fill-opacity=".55"/>
+<polygon points="45.00,67.00 57.12,74.00 57.12,88.00 45.00,95.00 32.88,88.00 32.88,74.00" fill="url(#honey)" stroke="#b45309" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="42.48,72.60 46.36,74.84 46.36,79.32 42.48,81.56 38.60,79.32 38.60,74.84" fill="#ffffff" fill-opacity=".55"/>
+<circle cx="78.38" cy="46.30" r="2.80" fill="#1c1c38"/>
+<circle cx="79.36" cy="45.32" r="1.06" fill="#ffffff"/>
+<circle cx="87.62" cy="46.30" r="2.80" fill="#1c1c38"/>
+<circle cx="88.60" cy="45.32" r="1.06" fill="#ffffff"/>
+</svg>
