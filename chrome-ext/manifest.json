@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "BeeMini Claude (thử nghiệm)",
-  "version": "0.2.1",
-  "description": "Bảng giá nhỏ luôn nổi (Document Picture-in-Picture) với nhiều tiêu chí lọc kiểu FireAnt, trendline, đọc mã mới bằng giọng Việt.",
+  "name": "Bee Mini",
+  "version": "0.2.2",
+  "description": "Bảng giá nhỏ luôn nổi (Document Picture-in-Picture) với nhiều tiêu chí lọc, pullback / trendline, đọc mã mới bằng giọng Việt.",
   "minimum_chrome_version": "120",
   "permissions": ["alarms", "tts", "storage", "unlimitedStorage"],
   "host_permissions": [
@@ -12,7 +12,7 @@
   "background": { "service_worker": "sw.js" },
   "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "action": {
-    "default_title": "Mở bảng BeeMini Claude (thử nghiệm)",
+    "default_title": "Mở bảng Bee Mini",
     "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
   }
 }

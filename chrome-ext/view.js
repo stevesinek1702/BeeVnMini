@@ -21,11 +21,11 @@ export class BoardView {
     this.root = d.createElement('div');
     this.root.className = 'board';
     this.root.innerHTML =
-      `<div class="b-head"><img class="logo" src="${LOGO}" alt=""><span class="brand"><b>Bee</b><span>.vn</span></span>` +
+      `<div class="b-head"><img class="logo" src="${LOGO}" alt=""><span class="brand"><b>Bee</b><span> Mini</span></span>` +
       '<span class="meta"></span>' +
       '<span class="btn" data-act="refresh" title="Tải lại ngay">↻</span>' +
       '<span class="btn" data-act="mode" title="Thu gọn / đầy đủ">⤢</span>' +
-      (pip ? '<span class="btn" data-act="settings" title="Cài đặt bộ lọc (mở tab Bee.vn)">⚙</span>' : '') +
+      (pip ? '<span class="btn" data-act="settings" title="Cài đặt bộ lọc (mở tab Bee Mini)">⚙</span>' : '') +
       '</div><div class="b-filters" hidden></div><div class="b-body"></div><div class="b-msg" hidden></div>';
     this.meta = this.root.querySelector('.meta');
     this.filters = this.root.querySelector('.b-filters');

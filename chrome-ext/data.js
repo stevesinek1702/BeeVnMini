@@ -48,7 +48,7 @@ export async function fetchQuotes(symbols) {
       return null;
     }
   });
-  if (parts.every((p) => p === null)) throw new Error('Không lấy được giá từ FireAnt');
+  if (parts.every((p) => p === null)) throw new Error('Không lấy được giá');
   return parts.filter(Boolean).flat().map((q) => Object.fromEntries(QUOTE_FIELDS.map((k) => [k, q[k] ?? null])));
 }
 

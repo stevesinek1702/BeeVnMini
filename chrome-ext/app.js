@@ -1,4 +1,4 @@
-// Bee.vn mini trong Chrome — trang chính (tab của extension). Chép luồng của beevn_mini.pyw:
+// Bee Mini (Bee.vn mini trong Chrome) — trang chính (tab của extension). Chép luồng của beevn_mini.pyw:
 // lấy giá 30 s/lần trong giờ (10 phút ngoài giờ), MA / KL trung bình từ VNDirect mỗi ngày, chỉ báo kỹ thuật khi có
 // tiêu chí cần, lọc từng tiêu chí, báo mã mới (đọc tên / ting / im), vẽ bảng ở tab và ở cửa sổ nổi (PiP).
 import * as core from './lib/core.js';
@@ -340,9 +340,9 @@ class App {
     return [c.sortColumn || this.cfg.sortColumn, c.sortDirection || this.cfg.sortDirection];
   }
 
-  maSourceNote() {
-    if (this.histProgress < 1) return `đang tính MA ${Math.floor(this.histProgress * 100)}%`;
-    return 'MA: tự tính từ VNDirect';
+  // Chỉ báo tiến độ khi đang tính; xong thì không ghi gì (không để lộ nguồn dữ liệu trên bảng)
+  maNote() {
+    return this.histProgress < 1 ? `đang tính MA ${Math.floor(this.histProgress * 100)}%` : '';
   }
 
   techNote() {
@@ -373,9 +373,9 @@ class App {
 
     let filtersText = null;
     if (full && (hasFilter || watch)) {
-      filtersText = this.maSourceNote();
-      if (this.techPending()) filtersText += '   ·   ' + this.techNote();
-      if (!multi && sections.length) filtersText = core.describeFilters(sections[0][0].filters, sections[0][0].signals) + '   ·   ' + filtersText;
+      const bits = [this.maNote(), this.techPending() ? this.techNote() : ''];
+      if (!multi && sections.length) bits.unshift(core.describeFilters(sections[0][0].filters, sections[0][0].signals));
+      filtersText = bits.filter(Boolean).join('   ·   ') || null;
     }
 
     const total = sections.reduce((a, [, m]) => a + m.length, 0);
@@ -408,7 +408,7 @@ class App {
   renderStatus() {
     const bits = [];
     bits.push(this.pip ? 'Cửa sổ nổi: đang mở' : 'Cửa sổ nổi: chưa mở');
-    bits.push(this.maSourceNote());
+    if (this.maNote()) bits.push(this.maNote());
     if (this.cfg.criteria.some(core.needsTech)) {
       bits.push(this.techProgress < 1 ? this.techNote() : `chỉ báo kỹ thuật: xong (${this.tech.day || ''})`);
     }
@@ -557,7 +557,7 @@ class App {
     const st = w.document.createElement('style');
     st.textContent = this.cssText;
     w.document.head.appendChild(st);
-    w.document.title = 'Bee.vn';
+    w.document.title = 'Bee Mini';
     const icon = w.document.createElement('link');
     icon.rel = 'icon';
     icon.href = chrome.runtime.getURL('icons/icon32.png');
