@@ -479,7 +479,7 @@ class TinHieu(unittest.TestCase):
         cat = conditions.catalog()
         self.assertEqual(list(cat), [g for g, _ in conditions.GROUPS])
         self.assertTrue(all(cat.values()))                                  # nhóm nào cũng có điều kiện
-        self.assertEqual(sum(len(v) for v in cat.values()), 24 + 43)        # 24 cột số + 43 tín hiệu
+        self.assertEqual(sum(len(v) for v in cat.values()), 43 + 79)        # 43 cột số + 79 tín hiệu
         self.assertEqual(cat['price'][0], ('Thay đổi giá 1 tuần (%)', 'metric', 'change1w'))     # cột số trước tín hiệu
         self.assertIn(('Giá cắt lên SMA(…)', 'signal', 'PriceCrossAboveSMA'), cat['ma'])
         self.assertIn(('MACD cắt lên đường 0', 'signal', 'MACDCrossAboveZeroLine'), cat['macd'])
@@ -487,8 +487,8 @@ class TinHieu(unittest.TestCase):
         self.assertEqual(conditions.param_text(70.0), '70')
         self.assertEqual(conditions.param_text(3.5), '3.5')
 
-    def test_danh_muc_du_43_tin_hieu(self):
-        self.assertEqual(len(conditions.SIGNAL_LIST), 43)
+    def test_danh_muc_du_79_tin_hieu(self):
+        self.assertEqual(len(conditions.SIGNAL_LIST), 79)
         groups = {g for g, _ in conditions.GROUPS}
         for s in conditions.SIGNAL_LIST:
             self.assertIn(s.group, groups)
@@ -585,6 +585,97 @@ class RsiTaoDay(unittest.TestCase):
         self.assertEqual(row['_live']['intra'], {'15m': st})
         self.assertEqual(core.apply_signals([row], m15['signals']), [row])
         self.assertNotIn('intra', core.transform_quote(q)['_live'])
+
+
+class ChiBaoBoSung(unittest.TestCase):
+    """Parabolic SAR, Stochastic, Williams %R, CCI, ADX / DMI, OBV, Ichimoku, giá so với MA, các cột số chỉ báo.
+    Đã đối chiếu trên nến thật: SAR khớp hẳn bản chép ta.sar của TradingView; Stochastic / %R / CCI / ADX / ATR /
+    Ichimoku khớp thư viện ta 0.11 (OBV theo cách chuẩn: phiên đứng giá không cộng KL)."""
+    # Tăng đều: đóng cửa 1..60, cao = đóng + 0.5, thấp = đóng − 0.5, KL 1000
+    ST = stats_of(60)[0]
+
+    def ev(self, id_, live, st=None, **params):
+        return conditions.eval_signal(sig(id_, **params), st or self.ST, live)
+
+    def test_parabolic_sar(self):
+        self.assertEqual(self.ST['sart'], 1)
+        self.assertLess(self.ST['sar'], 59.5)                              # SAR dưới giá thấp
+        self.assertTrue(self.ev('SARUptrend', lv(61, high=61.5, low=60.5)))
+        self.assertFalse(self.ev('SARFlipDown', lv(61, high=61.5, low=60.5)))
+        crash = lv(50, high=60, low=49)                                    # giá thấp hôm nay thủng SAR → đảo chiều giảm
+        self.assertTrue(self.ev('SARFlipDown', crash))
+        self.assertTrue(self.ev('SARDowntrend', crash))
+        self.assertFalse(self.ev('SARUptrend', crash))
+        self.assertFalse(self.ev('SARFlipUp', crash))
+        # Một phiên: SAR mới = SAR + af·(EP − SAR); thủng thì nhảy về EP cũ (hoặc giá cao hôm nay nếu cao hơn)
+        self.assertEqual(tech.sar_step(10, 20, .1, True, 21, 15), (11, 21, .1 + .02, True, False))
+        self.assertEqual(tech.sar_step(10, 20, .1, True, 22, 9), (22, 9, .02, False, True))
+
+    def test_stochastic_va_williams(self):
+        # %K thô 14 phiên = (đóng − thấp nhất) / (cao nhất − thấp nhất) = 13.5 / 14
+        self.assertAlmostEqual(self.ST['skr'][-1], 13.5 / 14 * 100, places=5)      # số lưu làm tròn 6 chữ số
+        self.assertAlmostEqual(self.ST['skd'], 13.5 / 14 * 100, places=5)
+        self.assertTrue(self.ev('StochAboveOverBoughtLine', lv(61, high=61.5), level=80))
+        drop = lv(50, high=60, low=50)
+        self.assertTrue(self.ev('StochKCrossBelowD', drop))                # %K tụt dưới %D
+        self.assertTrue(self.ev('StochCrossBelowOverBoughtLine', drop, level=80))
+        self.assertTrue(self.ev('WillRCrossBelowOverBoughtLine', drop, level=20))   # %R từ −3.6 xuống dưới −20
+        self.assertFalse(self.ev('StochKCrossAboveD', drop))
+        self.assertIsNone(tech.raw_k([(0, 1, 5, 5, 5, 1)] * 14, 13))       # cao nhất = thấp nhất → không tính
+
+    def test_cci(self):
+        self.assertAlmostEqual(tech.cci([1, 2, 3]), 100)                   # (3 − 2) / (0.015 × 2/3)
+        self.assertIsNone(tech.cci([5, 5, 5]))
+        self.assertTrue(self.ev('CCIAboveOverBoughtLine', lv(70, high=70, low=69), level=100))
+        self.assertFalse(self.ev('CCIBelowOverSoldLine', lv(70, high=70, low=69), level=100))
+
+    def test_adx_dmi(self):
+        self.assertEqual(tech.dm_tr((0, 0, 11, 9, 10), (0, 0, 12, 10, 11)), (1, 0.0, 2))
+        self.assertEqual(tech.dx_frac(0, 0), 0)
+        r = conditions.dmi_now(self.ST, lv(61, high=61.5, low=60.5))
+        self.assertGreater(r[2], r[3])                                     # tăng đều: +DI > −DI
+        self.assertGreater(r[4], 25)
+        self.assertTrue(self.ev('ADXStrongUptrend', lv(61, high=61.5, low=60.5), level=25))
+        self.assertTrue(self.ev('ADXAboveLevel', lv(61, high=61.5, low=60.5), level=25))
+        self.assertFalse(self.ev('DIPlusCrossAboveDIMinus', lv(61, high=61.5, low=60.5)))
+
+    def test_obv(self):
+        self.assertEqual((self.ST['obv'], self.ST['ob19'], self.ST['obm']), (59000, 950000, 49500))
+        self.assertTrue(self.ev('OBVAboveMA', lv(61, est=1000)))
+        self.assertTrue(self.ev('OBVCrossBelowMA', lv(50, est=50000)))     # OBV 59000 − 50000 < TB 47950
+        self.assertFalse(self.ev('OBVCrossAboveMA', lv(61, est=1000)))
+
+    def test_ichimoku(self):
+        st = stats_of(100)[0]
+        self.assertEqual(tech.mid_range(tech.closed_bars(make_bars(100)[0], '2099-01-01', keep), 99, 9), 96)   # (100 + 92) / 2
+        self.assertTrue(self.ev('IchimokuAboveCloud', lv(101), st))
+        self.assertFalse(self.ev('IchimokuBelowCloud', lv(101), st))
+        self.assertTrue(self.ev('IchimokuBelowCloud', lv(1), st))
+        self.assertFalse(self.ev('IchimokuAboveCloud', lv(1), self.ST))    # 60 phiên: chưa đủ để có mây
+
+    def test_gia_so_voi_ma_va_ema_cat_nhau(self):
+        self.assertTrue(self.ev('PriceAboveSMA', lv(61), period=20))
+        self.assertFalse(self.ev('PriceBelowSMA', lv(61), period=20))
+        self.assertTrue(self.ev('PriceBelowEMA', lv(40), period=20))
+        self.assertTrue(self.ev('ShortSMAAboveLongSMA', lv(61), short=5, long=15))
+        self.assertFalse(self.ev('ShortSMAAboveLongSMA', lv(61)))          # SMA200 chưa đủ phiên
+        self.assertTrue(self.ev('ShortEMACrossBelowLongEMA', lv(1), short=10, long=20))
+        self.assertFalse(self.ev('ShortEMACrossAboveLongEMA', lv(61), short=10, long=20))
+        self.assertEqual(sig('ShortEMACrossAboveLongEMA', short=50, long=20)['params'], {'short': 10, 'long': 20})
+
+    def test_cot_so_chi_bao(self):
+        m = conditions.indicator_metrics(self.ST, lv(61, high=61.5, low=60, volume=1000))
+        self.assertEqual(m['rsi14'], 100.0)                                # chưa phiên nào giảm
+        self.assertAlmostEqual(m['fromHigh1m'], (61.5 - 61) / 61.5 * 100)  # đỉnh tính cả giá cao hôm nay
+        self.assertAlmostEqual(m['willR'], m['stochK'] - 100, delta=5)
+        for k in ('mfi14', 'stochK', 'cci20', 'bbWidth', 'adx14', 'atrPct', 'fromLow1y'):
+            self.assertIsNotNone(m[k], k)
+        self.assertTrue(all(v is None for v in conditions.indicator_metrics(None, lv(61)).values()))
+        self.assertEqual((self.ST['v50'], self.ST['v100']), (1000, None))  # 60 phiên: chưa đủ KLTB 100
+        self.assertAlmostEqual(self.ST['gv20'], 50.5 * 1000 / 1e6)        # GTTB 20: giá 41..60 × 1000 cp, tỷ đồng
+        self.assertEqual(core.format_metric(12.345, 'upct'), ('12.3%', ''))
+        self.assertEqual(core.format_metric(-45.67, 'num'), ('-45.7', ''))
+        self.assertEqual(core.format_metric(3.46, 'bil'), ('3.5 tỷ', ''))
 
 
 class CotSoKieuFireAnt(unittest.TestCase):

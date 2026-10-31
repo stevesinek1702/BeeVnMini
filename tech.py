@@ -15,7 +15,7 @@ import math
 PRICE_AVG_N = (4, 5, 9, 10, 14, 15, 19, 20, 44, 45, 49, 50, 99, 100, 199, 200)
 VOL_AVG_N = (4, 5, 9, 10, 14, 19, 20, 44)
 EMA_N = (5, 10, 15, 20, 45, 50, 100, 200)
-VERSION = 7        # đổi khi thêm số thống kê mới → bộ nhớ đệm tech.json cũ của hôm nay bị bỏ, tải lại
+VERSION = 8        # đổi khi thêm số thống kê mới → bộ nhớ đệm tech.json cũ của hôm nay bị bỏ, tải lại
 # Các mốc "1 tuần … 1 năm": tính theo lịch (ngày hoặc tháng) lùi từ hôm nay.
 PERIODS = {'1w': ('d', 7), '2w': ('d', 14), '1m': ('m', 1), '3m': ('m', 3), '6m': ('m', 6), '1y': ('m', 12)}
 MIN_BARS = 20      # ít hơn chừng này phiên (mã mới niêm yết) thì chưa tính — thà thiếu còn hơn sai
@@ -45,6 +45,12 @@ RSI_SIGNAL_N, RSI_KEEP = 14, 30
 INTRA_MIN = 15
 INTRA_SESSIONS = ((9 * 60, 11 * 60 + 30), (13 * 60, 15 * 60))
 INTRA_MIN_BARS = 60     # ~4 phiên mã thanh khoản tốt; mã ít khớp lệnh thì nến thưa, RSI 15 phút vô nghĩa → không tính
+# Chỉ báo bổ sung: Parabolic SAR (0.02, 0.2) kiểu Wilder; Stochastic chậm (14, 3, 3) — Williams %R (14) = %K thô − 100;
+# CCI (20); ADX / DMI (14) như ta.dmi của TradingView (trung bình Wilder); OBV + TB 20 phiên; Ichimoku (9, 26, 52),
+# mây dời tới 25 phiên như TradingView. Như mọi chỉ báo ở đây: tính tới phiên đã đóng, conditions.py ghép phiên hôm nay.
+SAR_STEP, SAR_MAX = .02, .2
+STOCH_N, CCI_N, DMI_N, OBV_N = 14, 20, 14, 20
+ICHI_T, ICHI_K, ICHI_B, ICHI_SHIFT = 9, 26, 52, 25
 
 
 def minus_period(date, kind, n):
@@ -147,6 +153,118 @@ def money_flow(bars, n=14):
     p14, n14 = sum(pos[-n:]), sum(neg[-n:])
     mfi = 100.0 if n14 == 0 else 100 - 100 / (1 + p14 / n14)
     return p13, n13, mfi, tp[-1]
+
+
+def sar_step(sar, ep, af, up, h, lo):
+    """Một phiên Parabolic SAR như ta.sar của TradingView: SAR phiên này = SAR trước + af·(EP − SAR trước) (chưa kẹp);
+    giá thấp (đang tăng) / giá cao (đang giảm) chạm qua là đảo chiều — SAR nhảy về đỉnh / đáy của nhịp cũ.
+    → (SAR chưa kẹp, EP, af, chiều tăng?, vừa đảo chiều?)."""
+    sar = sar + af * (ep - sar)
+    if up and sar > lo:
+        return max(h, ep), lo, SAR_STEP, False, True
+    if not up and sar < h:
+        return min(lo, ep), h, SAR_STEP, True, True
+    if up and h > ep:
+        ep, af = h, min(af + SAR_STEP, SAR_MAX)
+    elif not up and lo < ep:
+        ep, af = lo, min(af + SAR_STEP, SAR_MAX)
+    return sar, ep, af, up, False
+
+
+def parabolic_sar(rows):
+    """Parabolic SAR (0.02, 0.2) như ta.sar của TradingView tại phiên cuối → (chiều: 1 tăng / −1 giảm, SAR, EP, af);
+    SAR đã kẹp không lấn vào giá thấp / cao của 2 phiên trước. Khởi đầu theo chiều 2 phiên đầu."""
+    if len(rows) < 3:
+        return None, None, None, None
+    up = rows[1][4] > rows[0][4]
+    ep, sar, af = (rows[1][2], rows[0][3], SAR_STEP) if up else (rows[1][3], rows[0][2], SAR_STEP)
+    for i in range(1, len(rows)):
+        h, lo = rows[i][2], rows[i][3]
+        if i == 1:                              # phiên đầu xu hướng: chỉ xét đảo chiều, chưa dời EP
+            sar = sar + af * (ep - sar)
+            if up and sar > lo:
+                sar, ep, up = max(h, ep), lo, False
+            elif not up and sar < h:
+                sar, ep, up = min(lo, ep), h, True
+        else:
+            sar, ep, af, up, _ = sar_step(sar, ep, af, up, h, lo)
+        prev = rows[max(i - 2, 0):i]           # 2 phiên trước (phiên thứ 2 chỉ có 1)
+        sar = min([sar] + [r[3] for r in prev]) if up else max([sar] + [r[2] for r in prev])
+    return (1 if up else -1), sar, ep, af
+
+
+def raw_k(rows, i, n=STOCH_N):
+    """%K thô (n) tại phiên i; None nếu chưa đủ phiên hoặc cao nhất = thấp nhất."""
+    if i < n - 1:
+        return None
+    win = rows[i - n + 1:i + 1]
+    hh, ll = max(r[2] for r in win), min(r[3] for r in win)
+    return (rows[i][4] - ll) / (hh - ll) * 100 if hh > ll else None
+
+
+def cci(tps):
+    """CCI của dãy giá điển hình (phần tử cuối là phiên đang xét); None nếu dao động trung bình = 0."""
+    m = _mean(tps)
+    md = sum(abs(x - m) for x in tps) / len(tps)
+    return (tps[-1] - m) / (.015 * md) if md else None
+
+
+def _rma(values, n):
+    """Trung bình Wilder (rma của TradingView) tại từng phần tử: mồi bằng trung bình đơn n phần tử đầu, sau đó
+    (cũ×(n−1)+mới)/n; các phần tử trước đó None."""
+    out = [None] * len(values)
+    if len(values) < n:
+        return out
+    a = _mean(values[:n])
+    out[n - 1] = a
+    for i in range(n, len(values)):
+        a = (a * (n - 1) + values[i]) / n
+        out[i] = a
+    return out
+
+
+def dm_tr(prev, cur):
+    """(+DM, −DM, TR) của phiên `cur` so với phiên `prev` — mỗi phiên dạng (…, cao, thấp, đóng, …)."""
+    up, down = cur[2] - prev[2], prev[3] - cur[3]
+    return (up if up > down and up > 0 else 0.0, down if down > up and down > 0 else 0.0,
+            max(cur[2] - cur[3], abs(cur[2] - prev[4]), abs(cur[3] - prev[4])))
+
+
+def di(dm, atr):
+    return 100 * dm / atr if atr else 0.0
+
+
+def dx_frac(pdi, mdi):
+    """|+DI − −DI| / (+DI + −DI) — ADX là trung bình Wilder của số này × 100."""
+    s = pdi + mdi
+    return abs(pdi - mdi) / (s if s else 1)
+
+
+def dmi_parts(rows, n=DMI_N):
+    """ADX / DMI tại phiên cuối: (trung bình Wilder của TR, +DM, −DM, |+DI − −DI| / (+DI + −DI)); None nếu thiếu phiên."""
+    parts = [dm_tr(p, r) for p, r in zip(rows, rows[1:])]
+    atr = _rma([x[2] for x in parts], n)
+    pdm = _rma([x[0] for x in parts], n)
+    mdm = _rma([x[1] for x in parts], n)
+    dx = [dx_frac(di(p, a), di(m, a)) for a, p, m in zip(atr, pdm, mdm) if a is not None]
+    adx = _rma(dx, n)
+    if not adx or adx[-1] is None:
+        return None
+    return atr[-1], pdm[-1], mdm[-1], adx[-1]
+
+
+def mid_range(rows, i, n):
+    """(cao nhất + thấp nhất) / 2 của n phiên tính tới phiên i — đường Tenkan / Kijun / Span B; None nếu chưa đủ phiên."""
+    if i < n - 1:
+        return None
+    win = rows[i - n + 1:i + 1]
+    return (max(r[2] for r in win) + min(r[3] for r in win)) / 2
+
+
+def ichimoku_lead(rows, i):
+    """[Span A, Span B] tính ở phiên i — tức mây của phiên i + 25; None nếu chưa đủ phiên."""
+    t, k, b = mid_range(rows, i, ICHI_T), mid_range(rows, i, ICHI_K), mid_range(rows, i, ICHI_B)
+    return None if None in (t, k, b) else [(t + k) / 2, b]
 
 
 def streak(closes):
@@ -305,6 +423,9 @@ def stats_from_bars(bars, today, date_of, history=False):
         out[f'p{k}'] = _mean(closes[-k:]) if n >= k else None    # chưa đủ phiên (vd SMA200 mã mới) → không tính
     for k in VOL_AVG_N:
         out[f'v{k}'] = _mean(vols[-k:])
+    for k in (50, 100):
+        out[f'v{k}'] = _mean(vols[-k:]) if n >= k else None
+    out['gv20'] = _mean([r[4] * r[5] for r in rows[-20:]]) / 1e6       # GTTB 20 phiên, tỷ đồng (giá nghìn đồng)
     since3m = minus_period(today, 'm', 3)
     v3m = [v for d, v in zip(dates, vols) if d >= since3m]
     out['v3m'] = _mean(v3m) if v3m else None
@@ -329,6 +450,33 @@ def stats_from_bars(bars, today, date_of, history=False):
     out['ag'], out['al'] = wilder_rsi_parts(closes)
     out['rs'] = [round(x, 4) for x in rsi_tail(closes)]
     out['pmf'], out['nmf'], out['mfi'], _ = money_flow(rows)
+
+    # Parabolic SAR; Stochastic (%K thô / %K chậm 2 phiên cuối, %D phiên cuối, cao / thấp 13 phiên cuối)
+    out['sart'], out['sar'], out['sep'], out['saf'] = parabolic_sar(rows)
+    kr = [raw_k(rows, i) for i in range(n - 5, n)]
+    ks = [None if None in kr[j:j + 3] else (kr[j] + kr[j + 1] + kr[j + 2]) / 3 for j in range(3)]
+    out['skr'], out['sks'] = kr[-2:], ks[-2:]
+    out['skd'] = None if None in ks else (ks[0] + ks[1] + ks[2]) / 3
+    out['hh13'] = max(r[2] for r in rows[-(STOCH_N - 1):])
+    out['ll13'] = min(r[3] for r in rows[-(STOCH_N - 1):])
+    # CCI: giá điển hình 19 phiên cuối + CCI phiên cuối
+    tps = [(h + lo + c) / 3 for _, _, h, lo, c, _ in rows]
+    out['tp19'] = tps[-(CCI_N - 1):]
+    out['cci'] = cci(tps[-CCI_N:])
+    # ADX / DMI
+    out['atr'], out['pdm'], out['mdm'], out['dxa'] = dmi_parts(rows) or (None, None, None, None)
+    # OBV (cộng dồn từ phiên thứ 2) + tổng 19 / TB 20 phiên cuối
+    obv, s = [], 0
+    for p, r in zip(rows, rows[1:]):
+        s += r[5] if r[4] > p[4] else (-r[5] if r[4] < p[4] else 0)
+        obv.append(s)
+    ok = len(obv) >= OBV_N
+    out['obv'], out['ob19'], out['obm'] = (obv[-1], sum(obv[-(OBV_N - 1):]), sum(obv[-OBV_N:]) / OBV_N) if ok else (None,) * 3
+    # Ichimoku: Tenkan / Kijun phiên cuối, cao / thấp 8 và 25 phiên cuối, mây hôm nay (ca) và hôm qua (cb)
+    out['tk'], out['kj'] = mid_range(rows, n - 1, ICHI_T), mid_range(rows, n - 1, ICHI_K)
+    for k in (ICHI_T - 1, ICHI_K - 1):
+        out[f'ih{k}'], out[f'il{k}'] = max(r[2] for r in rows[-k:]), min(r[3] for r in rows[-k:])
+    out['ca'], out['cb'] = ichimoku_lead(rows, n - ICHI_SHIFT), ichimoku_lead(rows, n - 1 - ICHI_SHIFT)
 
     # Đỉnh / đáy và giá mốc "1 tuần … 1 năm trước"
     for key, (kind, k) in PERIODS.items():

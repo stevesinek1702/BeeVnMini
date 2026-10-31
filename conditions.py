@@ -18,9 +18,10 @@ from collections import namedtuple
 import tech
 
 # ── Nhóm hiển thị (cho bộ chọn điều kiện) ───────────────────────────────
-GROUPS = [('price', 'Giá'), ('volume', 'Khối lượng'), ('ma', 'Đường trung bình'),
-          ('rsi', 'RSI (14)'), ('mfi', 'MFI (14)'), ('bb', 'Bollinger Band (20)'), ('macd', 'MACD'),
-          ('pullback', 'Pullback & trendline')]
+GROUPS = [('price', 'Giá'), ('volume', 'Khối lượng & dòng tiền'), ('ma', 'Đường trung bình'),
+          ('rsi', 'RSI (14)'), ('mfi', 'MFI (14)'), ('stoch', 'Stochastic (14, 3, 3)'), ('osc', 'Williams %R & CCI'),
+          ('bb', 'Bollinger Band (20)'), ('macd', 'MACD'), ('adx', 'ADX / DMI (14)'), ('sar', 'Parabolic SAR'),
+          ('ichimoku', 'Ichimoku (9, 26, 52)'), ('pullback', 'Pullback & trendline')]
 
 # ── Điều kiện dạng con số ───────────────────────────────────────────────
 # (khoá, nhãn đầy đủ, nhãn ngắn trên tiêu đề cột, nhóm, kiểu hiển thị)
@@ -30,6 +31,14 @@ METRICS = [
     ('change3m', 'Thay đổi giá 3 tháng (%)', '% 3 tháng', 'price', 'pct'),
     ('change6m', 'Thay đổi giá 6 tháng (%)', '% 6 tháng', 'price', 'pct'),
     ('change1y', 'Thay đổi giá 1 năm (%)', '% 1 năm', 'price', 'pct'),
+    ('fromHigh1m', 'Giá cách đỉnh 1 tháng (%)', '↓ đỉnh 1T', 'price', 'upct'),
+    ('fromHigh3m', 'Giá cách đỉnh 3 tháng (%)', '↓ đỉnh 3T', 'price', 'upct'),
+    ('fromHigh6m', 'Giá cách đỉnh 6 tháng (%)', '↓ đỉnh 6T', 'price', 'upct'),
+    ('fromHigh1y', 'Giá cách đỉnh 1 năm (%)', '↓ đỉnh 1N', 'price', 'upct'),
+    ('fromLow1m', 'Giá cách đáy 1 tháng (%)', '↑ đáy 1T', 'price', 'upct'),
+    ('fromLow3m', 'Giá cách đáy 3 tháng (%)', '↑ đáy 3T', 'price', 'upct'),
+    ('fromLow6m', 'Giá cách đáy 6 tháng (%)', '↑ đáy 6T', 'price', 'upct'),
+    ('fromLow1y', 'Giá cách đáy 1 năm (%)', '↑ đáy 1N', 'price', 'upct'),
     ('upDays', 'Số phiên tăng giá liên tục', 'Phiên tăng', 'price', 'int'),
     ('downDays', 'Số phiên giảm giá liên tục', 'Phiên giảm', 'price', 'int'),
     ('upDaysBeforeDown', 'Số phiên tăng liên tục trước khi đảo chiều giảm', 'Tăng→giảm', 'price', 'int'),
@@ -38,9 +47,20 @@ METRICS = [
     ('avgVol5', 'KLTB 5 phiên', 'KLTB 5', 'volume', 'vol'),
     ('avgVol10', 'KLTB 10 phiên', 'KLTB 10', 'volume', 'vol'),
     ('avgVol20', 'KLTB 20 phiên', 'KLTB 20', 'volume', 'vol'),
+    ('avgVol50', 'KLTB 50 phiên', 'KLTB 50', 'volume', 'vol'),
+    ('avgVol100', 'KLTB 100 phiên', 'KLTB 100', 'volume', 'vol'),
     ('avgVol3m', 'KLTB 3 tháng', 'KLTB 3T', 'volume', 'vol'),
+    ('avgValue20', 'GTTB 20 phiên (tỷ đồng)', 'GTTB 20', 'volume', 'bil'),
     ('foreignNetVol', 'KL nước ngoài mua ròng', 'KL NN ròng', 'volume', 'svol'),
     ('foreignNetValue', 'GT nước ngoài mua ròng (tỷ)', 'GT NN ròng', 'volume', 'sbil'),
+    ('rsi14', 'RSI(14) hiện tại', 'RSI', 'rsi', 'num'),
+    ('mfi14', 'MFI(14) hiện tại', 'MFI', 'mfi', 'num'),
+    ('stochK', 'Stochastic %K (14, 3, 3)', '%K', 'stoch', 'num'),
+    ('willR', 'Williams %R (14)', '%R', 'osc', 'num'),
+    ('cci20', 'CCI (20)', 'CCI', 'osc', 'num'),
+    ('bbWidth', 'Độ rộng dải Bollinger (20, 2) (% so với đường giữa)', 'BB rộng', 'bb', 'upct'),
+    ('adx14', 'ADX (14)', 'ADX', 'adx', 'num'),
+    ('atrPct', 'Biên độ ATR (14) so với giá (%)', 'ATR %', 'adx', 'upct'),
     ('distSMA20', 'Khoảng cách giá tới SMA20 (%)', '↕SMA20', 'pullback', 'pct'),
     ('distSMA50', 'Khoảng cách giá tới SMA50 (%)', '↕SMA50', 'pullback', 'pct'),
     ('brkTL3m', 'Vượt trendline giảm 3 tháng cách đây (phiên)', 'Vượt TL 3T', 'pullback', 'ago'),
@@ -58,15 +78,19 @@ METRIC_FMT = {m[0]: m[4] for m in METRICS}
 # Cột đứng riêng: khi tính thiếu số (chưa có lịch sử, mã mới…) thì KHÔNG khớp — FireAnt cũng loại những mã đó.
 
 _TECH_PERIOD = {'change1w': '1w', 'change1m': '1m', 'change3m': '3m', 'change6m': '6m', 'change1y': '1y'}
-_TECH_AVGVOL = {'avgVol5': 'v5', 'avgVol10': 'v10', 'avgVol20': 'v20', 'avgVol3m': 'v3m'}
+_TECH_AVGVOL = {'avgVol5': 'v5', 'avgVol10': 'v10', 'avgVol20': 'v20', 'avgVol50': 'v50', 'avgVol100': 'v100',
+                'avgVol3m': 'v3m', 'avgValue20': 'gv20'}
 _TECH_DIST = {'distSMA20': 20, 'distSMA50': 50}
 # Phiên vượt trendline giảm gần nhất (0 = hôm nay): cần quét lùi tech.last_break — nặng, chỉ tính khi có tiêu chí dùng.
 # Mỗi cột kèm 2 cột đi cùng (giá vượt, % hiện tại so với giá vượt): lọc cột nào trong nhóm thì cả 3 cùng hiện.
 BREAK_METRIC_KEYS = {'brkTL3m': '3m', 'brkTL6m': '6m'}
 BREAK_COMPANIONS = {k: (k + 'Px', k + 'Pct') for k in BREAK_METRIC_KEYS}
 BREAK_ALL_KEYS = {k: grp for grp, ks in BREAK_COMPANIONS.items() for k in (grp, *ks)}      # cột → cột chính của nhóm
+# Cột tính từ chỉ báo + phiên hôm nay (giá / cao / thấp / KL hiện tại): indicator_metrics
+INDICATOR_KEYS = ('rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct',
+                  *(f'from{s}{p}' for s in ('High', 'Low') for p in ('1m', '3m', '6m', '1y')))
 # Cột phải có lịch sử nến mới tính được (các cột còn lại lấy thẳng từ quote)
-TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, *_TECH_DIST, *BREAK_ALL_KEYS,
+TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, *_TECH_DIST, *BREAK_ALL_KEYS, *INDICATOR_KEYS,
                     'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp')
 
 
@@ -147,6 +171,13 @@ P_RSI_DOWN = _p('level', 'ngưỡng quá bán', (10, 15, 20, 25, 30, 35, 40), 30
 TF_NAME = {'15m': '15 phút', 'D': 'ngày'}
 P_TF = _p('tf', 'khung', tuple(TF_NAME), '15m')
 P_RSI_LOOK = _p('look', 'đáy trong (nến)', (8, 12, 16, 20, 24, tech.RSI_KEEP), 16)
+P_MA_STATE = _p('period', 'kỳ (phiên)', MA_PERIODS, 20)
+P_STO_UP = _p('level', 'ngưỡng quá mua', (70, 75, 80, 85, 90), 80, True, 0, 100)
+P_STO_DOWN = _p('level', 'ngưỡng quá bán', (10, 15, 20, 25, 30), 20, True, 0, 100)
+P_WR_DOWN = _p('level', 'ngưỡng quá bán (−)', (70, 80, 90), 80, True, 0, 100)
+P_WR_UP = _p('level', 'ngưỡng quá mua (−)', (10, 20, 30), 20, True, 0, 100)
+P_CCI = _p('level', 'ngưỡng (±)', (100, 150, 200), 100, True, 0, 500)
+P_ADX = _p('level', 'ADX tối thiểu', (20, 25, 30, 40), 25, True, 0, 100)
 P_MFI_UP = _p('level', 'ngưỡng quá mua', (70, 75, 80, 85, 90), 80, True, 0, 100)
 P_MFI_DOWN = _p('level', 'ngưỡng quá bán', (10, 15, 20, 25, 30), 20, True, 0, 100)
 P_BB = _p('std', 'độ lệch chuẩn', (2, 3.5), 2, True, 0.5, 6)
@@ -436,6 +467,242 @@ def _retest_down_line(bounce):
     return fn
 
 
+# --- Chỉ báo bổ sung (tech.py): mọi số ghép phiên hôm nay = giá / cao / thấp hiện tại ------------------------
+def _hl(lv):
+    """(cao nhất, thấp nhất) của phiên hôm nay tính cả giá hiện tại; quote thiếu cao / thấp thì lấy giá hiện tại."""
+    last = lv['last']
+    return max(lv.get('high') or last, last), min(lv.get('low') or last, last)
+
+
+def ema_live(st, last, n):
+    """EMA(n) nếu giá hiện tại là giá đóng cửa hôm nay (như _ema_cross); None nếu thiếu số."""
+    e = st.get(f'e{n}')
+    return (2 * last + (n - 1) * e) / (n + 1) if e else None
+
+
+def _price_vs_ma(kind, above):
+    def fn(st, lv, p):
+        line = (sma_live if kind == 'sma' else ema_live)(st, lv['last'], p['period'])
+        return bool(line) and (lv['last'] > line if above else lv['last'] < line)
+    return fn
+
+
+def _sma_above(st, lv, p):
+    s, l = sma_live(st, lv['last'], p['short']), sma_live(st, lv['last'], p['long'])
+    return bool(s and l) and s > l
+
+
+def _ema_pair(up):
+    def fn(st, lv, p):
+        es, el = st.get(f"e{p['short']}"), st.get(f"e{p['long']}")
+        s, l = ema_live(st, lv['last'], p['short']), ema_live(st, lv['last'], p['long'])
+        if not (es and el and s and l):
+            return False
+        return (es <= el and s > l) if up else (es >= el and s < l)
+    return fn
+
+
+def _sar(kind):
+    """Parabolic SAR: phiên hôm nay (giá cao / thấp hiện tại) đi qua SAR là đảo chiều (tech.sar_step)."""
+    def fn(st, lv, p):
+        if any(st.get(k) is None for k in ('sart', 'sar', 'sep', 'saf')):
+            return False
+        hi, lo = _hl(lv)
+        *_, up, flip = tech.sar_step(st['sar'], st['sep'], st['saf'], st['sart'] == 1, hi, lo)
+        if kind == 'flip_up':
+            return flip and up
+        if kind == 'flip_down':
+            return flip and not up
+        return up if kind == 'up' else not up
+    return fn
+
+
+def raw_k_now(st, lv):
+    """%K thô (14) tính cả phiên hôm nay; None nếu thiếu số / cao nhất = thấp nhất."""
+    hh, ll = st.get('hh13'), st.get('ll13')
+    if hh is None or ll is None:
+        return None
+    hi, lo = _hl(lv)
+    hh, ll = max(hh, hi), min(ll, lo)
+    return (lv['last'] - ll) / (hh - ll) * 100 if hh > ll else None
+
+
+def stoch_now(st, lv):
+    """(%K, %D phiên đóng gần nhất, %K, %D tính cả phiên hôm nay) — Stochastic chậm 14, 3, 3; None nếu thiếu số."""
+    kr, ks, d = st.get('skr'), st.get('sks'), st.get('skd')
+    raw = raw_k_now(st, lv)
+    if raw is None or d is None or not kr or not ks or None in kr or None in ks:
+        return None
+    k = (kr[0] + kr[1] + raw) / 3
+    return ks[1], d, k, (ks[0] + ks[1] + k) / 3
+
+
+def _stoch(kind):
+    def fn(st, lv, p):
+        r = stoch_now(st, lv)
+        if r is None:
+            return False
+        k0, d0, k1, d1 = r
+        if kind == 'cross_up':
+            return k0 <= d0 and k1 > d1
+        if kind == 'cross_down':
+            return k0 >= d0 and k1 < d1
+        a = p['level']
+        if kind == 'cross_up_os':                     # %K cắt lên %D, lúc cắt %K còn trong vùng quá bán
+            return k0 <= d0 and k1 > d1 and k0 <= a
+        if kind == 'exit_os':
+            return k0 <= a < k1
+        if kind == 'exit_ob':
+            return k0 >= a > k1
+        return k1 < a if kind == 'below' else k1 > a
+    return fn
+
+
+def _willr(kind):
+    """Williams %R (14) = %K thô − 100 (từ −100 đến 0). Thoát quá bán: cắt lên −level; thoát quá mua: cắt xuống −level."""
+    def fn(st, lv, p):
+        kr, raw = st.get('skr'), raw_k_now(st, lv)
+        if raw is None or not kr or kr[-1] is None:
+            return False
+        w0, w1, a = kr[-1] - 100, raw - 100, -p['level']
+        return (w0 <= a < w1) if kind == 'exit_os' else (w0 >= a > w1)
+    return fn
+
+
+def cci_now(st, lv):
+    """(CCI(20) phiên đóng gần nhất, CCI tính cả phiên hôm nay); None nếu thiếu số."""
+    tps, prev = st.get('tp19'), st.get('cci')
+    if not tps or len(tps) < tech.CCI_N - 1 or prev is None:
+        return None
+    hi, lo = _hl(lv)
+    cur = tech.cci(tps + [(hi + lo + lv['last']) / 3])
+    return None if cur is None else (prev, cur)
+
+
+def _cci(kind):
+    def fn(st, lv, p):
+        r = cci_now(st, lv)
+        if r is None:
+            return False
+        c0, c1, a = r[0], r[1], p['level']
+        if kind == 'exit_os':
+            return c0 <= -a < c1
+        if kind == 'exit_ob':
+            return c0 >= a > c1
+        return c1 > a if kind == 'above' else c1 < -a
+    return fn
+
+
+def dmi_now(st, lv):
+    """(+DI, −DI phiên đóng gần nhất, +DI, −DI, ADX, ATR tính cả phiên hôm nay); None nếu thiếu số."""
+    need = ('atr', 'pdm', 'mdm', 'dxa', 'lh', 'll', 'lc')
+    if any(st.get(k) is None for k in need):
+        return None
+    hi, lo = _hl(lv)
+    n = tech.DMI_N
+    p, m, tr = tech.dm_tr((None, None, st['lh'], st['ll'], st['lc']), (None, None, hi, lo, lv['last']))
+    atr = (st['atr'] * (n - 1) + tr) / n
+    pdm = (st['pdm'] * (n - 1) + p) / n
+    mdm = (st['mdm'] * (n - 1) + m) / n
+    pd1, md1 = tech.di(pdm, atr), tech.di(mdm, atr)
+    adx = 100 * (st['dxa'] * (n - 1) + tech.dx_frac(pd1, md1)) / n
+    return tech.di(st['pdm'], st['atr']), tech.di(st['mdm'], st['atr']), pd1, md1, adx, atr
+
+
+def _dmi(kind):
+    def fn(st, lv, p):
+        r = dmi_now(st, lv)
+        if r is None:
+            return False
+        pd0, md0, pd1, md1, adx, _ = r
+        if kind == 'cross_up':
+            return pd0 <= md0 and pd1 > md1
+        if kind == 'cross_down':
+            return pd0 >= md0 and pd1 < md1
+        if kind == 'adx':
+            return adx > p['level']
+        return pd1 > md1 and adx > p['level']           # xu hướng tăng mạnh
+    return fn
+
+
+def obv_now(st, lv):
+    """(OBV, TB 20 phiên của OBV ở phiên đóng gần nhất, OBV, TB 20 tính cả hôm nay); KL hôm nay = KL dự kiến cả phiên."""
+    obv, s19, m, lc = st.get('obv'), st.get('ob19'), st.get('obm'), st.get('lc')
+    if None in (obv, s19, m, lc):
+        return None
+    vol, last = lv.get('est') or lv.get('volume') or 0, lv['last']
+    cur = obv + (vol if last > lc else (-vol if last < lc else 0))
+    return obv, m, cur, (s19 + cur) / tech.OBV_N
+
+
+def _obv(kind):
+    def fn(st, lv, p):
+        r = obv_now(st, lv)
+        if r is None:
+            return False
+        o0, m0, o1, m1 = r
+        if kind == 'cross_up':
+            return o0 <= m0 and o1 > m1
+        if kind == 'cross_down':
+            return o0 >= m0 and o1 < m1
+        return o1 > m1
+    return fn
+
+
+def _ichimoku(kind):
+    """Mây hôm nay = Span A / B tính 25 phiên trước (st['ca']), mây hôm qua st['cb']; Tenkan / Kijun ghép phiên hôm nay."""
+    def fn(st, lv, p):
+        need = ('tk', 'kj', 'ih8', 'il8', 'ih25', 'il25', 'ca', 'cb', 'lc')
+        if any(st.get(k) is None for k in need):
+            return False
+        last, ca, cb = lv['last'], st['ca'], st['cb']
+        if kind == 'above':
+            return last > max(ca)
+        if kind == 'below':
+            return last < min(ca)
+        if kind == 'break_up':
+            return st['lc'] <= max(cb) and last > max(ca)
+        hi, lo = _hl(lv)
+        tk = (max(st['ih8'], hi) + min(st['il8'], lo)) / 2
+        kj = (max(st['ih25'], hi) + min(st['il25'], lo)) / 2
+        return (st['tk'] <= st['kj'] and tk > kj) if kind == 'tk_up' else (st['tk'] >= st['kj'] and tk < kj)
+    return fn
+
+
+def indicator_metrics(st, lv):
+    """Các cột số tính từ chỉ báo + phiên hôm nay (INDICATOR_KEYS): RSI, MFI, Stochastic %K, Williams %R, CCI,
+    độ rộng Bollinger, ADX, ATR %, % giá cách đỉnh / đáy (đỉnh / đáy tính cả giá cao / thấp hôm nay). Thiếu số → None."""
+    out = dict.fromkeys(INDICATOR_KEYS, None)
+    if not _valid(st, lv):
+        return out
+    last = lv['last']
+    out['rsi14'] = rsi_now(st, last)[1]
+    out['mfi14'] = mfi_now(st, lv)[1]
+    s = stoch_now(st, lv)
+    out['stochK'] = s[2] if s else None
+    raw = raw_k_now(st, lv)
+    out['willR'] = None if raw is None else raw - 100
+    c = cci_now(st, lv)
+    out['cci20'] = c[1] if c else None
+    b = bb_now(st, last, 2)
+    if b:
+        mid = (st['p19'] * 19 + last) / 20
+        out['bbWidth'] = (b[1][0] - b[1][1]) / mid * 100 if mid else None
+    d = dmi_now(st, lv)
+    if d:
+        out['adx14'], out['atrPct'] = d[4], d[5] / last * 100
+    hi, lo = _hl(lv)
+    for per in ('1m', '3m', '6m', '1y'):
+        h, l_ = st.get('hi' + per), st.get('lo' + per)
+        if h:
+            h = max(h, hi)
+            out['fromHigh' + per] = (h - last) / h * 100
+        if l_:
+            l_ = min(l_, lo)
+            out['fromLow' + per] = (last - l_) / l_ * 100 if l_ > 0 else None
+    return out
+
+
 def _sig(id_, group, label, params, fn):
     return Signal(id_, group, label, tuple(params), fn)
 
@@ -446,6 +713,9 @@ SIGNAL_LIST = [
     _sig('EstimatedVolumeSurge', 'volume', 'KL dự kiến vượt TB {period} phiên tối thiểu {pct}%',
          [_p('period', 'TB (phiên)', MA_PERIODS, 5), _p('pct', 'vượt tối thiểu (%)', (10, 20, 30, 50, 70, 100, 150, 200, 300),
                                                       50, True, 1, 1000)], _est_volume_surge),
+    _sig('OBVCrossAboveMA', 'volume', 'OBV cắt lên đường TB 20 phiên của OBV', [], _obv('cross_up')),
+    _sig('OBVCrossBelowMA', 'volume', 'OBV cắt xuống đường TB 20 phiên của OBV', [], _obv('cross_down')),
+    _sig('OBVAboveMA', 'volume', 'OBV đang trên đường TB 20 phiên (dòng tiền vào)', [], _obv('above')),
     _sig('PriceCrossAboveSMA', 'ma', 'Giá cắt lên SMA({period})', [P_MA], _sma_cross(True)),
     _sig('PriceCrossBelowSMA', 'ma', 'Giá cắt xuống SMA({period})', [P_MA], _sma_cross(False)),
     _sig('PriceCrossAboveEMA', 'ma', 'Giá cắt lên EMA({period})', [P_MA], _ema_cross(True)),
@@ -454,6 +724,19 @@ SIGNAL_LIST = [
          [_p('short', 'SMA ngắn', (5, 10, 15, 20, 50), 5), _p('long', 'cắt lên SMA dài', (15, 20, 45, 50, 100, 200), 15)], _sma_pair(True)),
     _sig('ShortSMACrossBelowLongSMA', 'ma', 'SMA({short}) cắt xuống SMA({long})',
          [_p('short', 'SMA ngắn', (5, 10, 15, 20, 50), 5), _p('long', 'cắt xuống SMA dài', (15, 20, 45, 50, 100, 200), 15)], _sma_pair(False)),
+    _sig('PriceAboveSMA', 'ma', 'Giá đang trên SMA({period})', [P_MA_STATE], _price_vs_ma('sma', True)),
+    _sig('PriceBelowSMA', 'ma', 'Giá đang dưới SMA({period})', [P_MA_STATE], _price_vs_ma('sma', False)),
+    _sig('PriceAboveEMA', 'ma', 'Giá đang trên EMA({period})', [P_MA_STATE], _price_vs_ma('ema', True)),
+    _sig('PriceBelowEMA', 'ma', 'Giá đang dưới EMA({period})', [P_MA_STATE], _price_vs_ma('ema', False)),
+    _sig('ShortSMAAboveLongSMA', 'ma', 'SMA({short}) đang trên SMA({long})',
+         [_p('short', 'SMA ngắn', (5, 10, 15, 20, 50), 50), _p('long', 'trên SMA dài', (15, 20, 45, 50, 100, 200), 200)],
+         _sma_above),
+    _sig('ShortEMACrossAboveLongEMA', 'ma', 'EMA({short}) cắt lên EMA({long})',
+         [_p('short', 'EMA ngắn', (5, 10, 15, 20, 50), 10), _p('long', 'cắt lên EMA dài', (15, 20, 45, 50, 100, 200), 20)],
+         _ema_pair(True)),
+    _sig('ShortEMACrossBelowLongEMA', 'ma', 'EMA({short}) cắt xuống EMA({long})',
+         [_p('short', 'EMA ngắn', (5, 10, 15, 20, 50), 10), _p('long', 'cắt xuống EMA dài', (15, 20, 45, 50, 100, 200), 20)],
+         _ema_pair(False)),
     _sig('RSICrossAboveOverBoughtLine', 'rsi', 'RSI(14) đi vào vùng quá mua (trên {level})', [P_RSI_UP], _rsi('cross_up')),
     _sig('RSICrossBelowOverBoughtLine', 'rsi', 'RSI(14) thoát khỏi vùng quá mua (trên {level})', [P_RSI_UP], _rsi('cross_down')),
     _sig('RSIAboveOverBoughtLine', 'rsi', 'RSI(14) đang trong vùng quá mua (trên {level})', [P_RSI_UP], _rsi('above')),
@@ -468,6 +751,24 @@ SIGNAL_LIST = [
     _sig('MFICrossBelowOverSoldLine', 'mfi', 'MFI(14) đi vào vùng quá bán (dưới {level})', [P_MFI_DOWN], _mfi('cross_down')),
     _sig('MFICrossAboveOverSoldLine', 'mfi', 'MFI(14) thoát khỏi vùng quá bán (dưới {level})', [P_MFI_DOWN], _mfi('cross_up')),
     _sig('MFIBelowOverSoldLine', 'mfi', 'MFI(14) đang trong vùng quá bán (dưới {level})', [P_MFI_DOWN], _mfi('below')),
+    _sig('StochKCrossAboveD', 'stoch', 'Stochastic: %K cắt lên %D', [], _stoch('cross_up')),
+    _sig('StochKCrossBelowD', 'stoch', 'Stochastic: %K cắt xuống %D', [], _stoch('cross_down')),
+    _sig('StochKCrossAboveDOverSold', 'stoch', 'Stochastic: %K cắt lên %D từ vùng quá bán (dưới {level})', [P_STO_DOWN],
+         _stoch('cross_up_os')),
+    _sig('StochCrossAboveOverSoldLine', 'stoch', 'Stochastic thoát khỏi vùng quá bán (dưới {level})', [P_STO_DOWN],
+         _stoch('exit_os')),
+    _sig('StochCrossBelowOverBoughtLine', 'stoch', 'Stochastic thoát khỏi vùng quá mua (trên {level})', [P_STO_UP],
+         _stoch('exit_ob')),
+    _sig('StochBelowOverSoldLine', 'stoch', 'Stochastic đang trong vùng quá bán (dưới {level})', [P_STO_DOWN], _stoch('below')),
+    _sig('StochAboveOverBoughtLine', 'stoch', 'Stochastic đang trong vùng quá mua (trên {level})', [P_STO_UP], _stoch('above')),
+    _sig('WillRCrossAboveOverSoldLine', 'osc', 'Williams %R thoát vùng quá bán (cắt lên −{level})', [P_WR_DOWN],
+         _willr('exit_os')),
+    _sig('WillRCrossBelowOverBoughtLine', 'osc', 'Williams %R thoát vùng quá mua (cắt xuống −{level})', [P_WR_UP],
+         _willr('exit_ob')),
+    _sig('CCICrossAboveOverSoldLine', 'osc', 'CCI(20) thoát vùng quá bán (cắt lên −{level})', [P_CCI], _cci('exit_os')),
+    _sig('CCICrossBelowOverBoughtLine', 'osc', 'CCI(20) thoát vùng quá mua (cắt xuống +{level})', [P_CCI], _cci('exit_ob')),
+    _sig('CCIAboveOverBoughtLine', 'osc', 'CCI(20) đang trên +{level}', [P_CCI], _cci('above')),
+    _sig('CCIBelowOverSoldLine', 'osc', 'CCI(20) đang dưới −{level}', [P_CCI], _cci('below')),
     _sig('PriceCrossAboveBollingerBands', 'bb', 'Giá thoát ra ngoài biên trên Bollinger (20, {std})', [P_BB], _bb('cross_above')),
     _sig('PriceCrossFromAboveBollingerBands', 'bb', 'Giá cắt xuống từ ngoài biên trên Bollinger (20, {std})', [P_BB],
          _bb('back_from_above')),
@@ -484,6 +785,19 @@ SIGNAL_LIST = [
     _sig('MACDAboveZeroLine', 'macd', 'MACD đang ở trên đường 0', [], _macd('above_zero')),
     _sig('MACDCrossBelowZeroLine', 'macd', 'MACD cắt xuống đường 0', [], _macd('cross_below_zero')),
     _sig('MACDBelowZeroLine', 'macd', 'MACD đang ở dưới đường 0', [], _macd('below_zero')),
+    _sig('ADXAboveLevel', 'adx', 'ADX(14) trên {level} (có xu hướng mạnh)', [P_ADX], _dmi('adx')),
+    _sig('DIPlusCrossAboveDIMinus', 'adx', '+DI cắt lên −DI', [], _dmi('cross_up')),
+    _sig('DIPlusCrossBelowDIMinus', 'adx', '+DI cắt xuống −DI', [], _dmi('cross_down')),
+    _sig('ADXStrongUptrend', 'adx', 'Xu hướng tăng mạnh: +DI trên −DI, ADX trên {level}', [P_ADX], _dmi('strong_up')),
+    _sig('SARFlipUp', 'sar', 'Parabolic SAR đảo chiều tăng (giá vượt lên SAR)', [], _sar('flip_up')),
+    _sig('SARFlipDown', 'sar', 'Parabolic SAR đảo chiều giảm (giá thủng SAR)', [], _sar('flip_down')),
+    _sig('SARUptrend', 'sar', 'Parabolic SAR đang báo xu hướng tăng (SAR dưới giá)', [], _sar('up')),
+    _sig('SARDowntrend', 'sar', 'Parabolic SAR đang báo xu hướng giảm (SAR trên giá)', [], _sar('down')),
+    _sig('IchimokuAboveCloud', 'ichimoku', 'Giá đang trên mây Ichimoku', [], _ichimoku('above')),
+    _sig('IchimokuBelowCloud', 'ichimoku', 'Giá đang dưới mây Ichimoku', [], _ichimoku('below')),
+    _sig('IchimokuBreakAboveCloud', 'ichimoku', 'Giá vượt lên trên mây Ichimoku', [], _ichimoku('break_up')),
+    _sig('IchimokuTenkanCrossAboveKijun', 'ichimoku', 'Tenkan cắt lên Kijun', [], _ichimoku('tk_up')),
+    _sig('IchimokuTenkanCrossBelowKijun', 'ichimoku', 'Tenkan cắt xuống Kijun', [], _ichimoku('tk_down')),
     _sig('PullbackToSMA', 'pullback', 'Pullback về SMA({period}), vùng ±{tol}%, KL cạn: {dry}',
          [P_PB_MA, P_PB_TOL, P_PB_DRY], _pullback('sma', False)),
     _sig('PullbackBounceSMA', 'pullback', 'Bật lên từ SMA({period}), vùng ±{tol}%, KL cạn: {dry}',
@@ -524,8 +838,8 @@ def normalize_signal(raw):
             if ok:
                 v = p.choices[p.choices.index(v)]      # 5.0 → 5: khoá thống kê là p5, không phải p5.0
         params[p.id] = v if ok else p.default
-    if raw['id'] in ('ShortSMACrossAboveLongSMA', 'ShortSMACrossBelowLongSMA') and params['short'] >= params['long']:
-        params['short'], params['long'] = 5, 15      # SMA ngắn phải ngắn hơn SMA dài
+    if 'short' in params and 'long' in params and params['short'] >= params['long']:
+        params['short'], params['long'] = (p.default for p in sig.params)     # đường ngắn phải ngắn hơn đường dài
     return {'id': sig.id, 'params': params}
 
 

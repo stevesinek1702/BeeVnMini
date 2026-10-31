@@ -367,6 +367,7 @@ def transform_quote(q, hist=None, tech_stats=None, now=None, intra=None):
     row['_tech'] = tech_stats or None
     row['_live'] = {'last': price, 'high': k(q.get('PriceHigh')), 'low': k(q.get('PriceLow')),
                     'volume': vol, 'est': est}
+    row.update(conditions.indicator_metrics(tech_stats or None, row['_live']))
     if intra:
         row['_live']['intra'] = intra
     return row
@@ -764,4 +765,10 @@ def format_metric(v, fmt):
         return ('+' if v > 0 else '-' if v < 0 else '') + format_volume(abs(v)), tone
     if fmt == 'sbil':
         return ('+' if v > 0 else '') + _fixed(v, 1) + ' tỷ', tone
+    if fmt == 'bil':
+        return _fixed(v, 1) + ' tỷ', ''
+    if fmt == 'num':                  # giá trị chỉ báo (RSI, ADX, CCI…)
+        return _fixed(v, 1), ''
+    if fmt == 'upct':                 # % không dấu (cách đỉnh / đáy, độ rộng dải…)
+        return _fixed(v, 1) + '%', ''
     return str(v), ''
