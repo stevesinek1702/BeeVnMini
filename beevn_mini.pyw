@@ -32,12 +32,13 @@ sys.path.insert(0, HERE)
 
 import conditions  # noqa: E402
 import core  # noqa: E402
+import tech  # noqa: E402
 from symbols import SYMBOLS  # noqa: E402
 
 SYMBOL_SET = set(SYMBOLS)
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.6.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.7.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -47,6 +48,7 @@ DATA_DIR = os.environ.get('BEEVN_DATA_DIR') or os.path.join(os.environ.get('APPD
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 HIST_PATH = os.path.join(DATA_DIR, 'hist.json')
 TECH_PATH = os.path.join(DATA_DIR, 'tech.json')      # thống kê kỹ thuật từ nến ngày, mỗi ngày tải 1 lần
+INTRA_PATH = os.path.join(DATA_DIR, 'intra.json')    # thống kê nến 15 phút, tải lại sau mỗi lần chốt nến
 LOG_PATH = os.path.join(DATA_DIR, 'log.txt')
 ICON_PATH = os.path.join(RES_DIR, 'beevn.ico')
 SPEAK_PS = os.path.join(RES_DIR, 'speak.ps1')
@@ -60,6 +62,8 @@ ALERT_LABEL = [('speak', 'Đọc tên mã'), ('beep', 'Kêu "ting"'), ('off', 'I
 ON_HOURS_SEC = 30
 OFF_HOURS_SEC = 600
 HIST_CHECK_SEC = 600
+INTRA_DELAY_SEC = 20     # chốt nến 15 phút xong chờ chừng này giây mới tải, cho dchart kịp ghi nến vừa chốt
+INTRA_KEEP_SEC = 1200    # bộ nến 15 phút của mốc trước vẫn dùng trong lúc đang tải mốc mới (~30 s)
 STALE_SEC = 120
 MAX_ROWS = 25            # 1 tiêu chí: quá số hàng này thì lăn chuột để xem tiếp
 SECTION_ROWS = 8         # nhiều tiêu chí: mỗi khối mặc định hiện chừng này hàng (＋/－ để đổi)
@@ -96,7 +100,8 @@ EXCHANGE_LABEL = {'HSX': 'HSX', 'HNX': 'HNX', 'UPCOM': 'UpCom', 'ALL': 'Cả 3 s
 OP_LABEL = [('gt', 'Lớn hơn (>)'), ('lt', 'Nhỏ hơn (<)'), ('eq', 'Bằng (=)')]
 # Điều kiện thêm kiểu FireAnt: "từ / đến / trong khoảng" (FireAnt tính cả mốc)
 METRIC_OP_LABEL = [('ge', 'Từ (≥)'), ('le', 'Đến (≤)'), ('bt', 'Trong khoảng')]
-METRIC_UNIT = {'pct': '%', 'pct0': '%', 'int': 'phiên', 'vol': 'cổ phiếu', 'svol': 'cổ phiếu', 'sbil': 'tỷ đồng'}
+METRIC_UNIT = {'pct': '%', 'pct0': '%', 'int': 'phiên', 'vol': 'cổ phiếu', 'svol': 'cổ phiếu', 'sbil': 'tỷ đồng',
+               'ago': 'phiên trước (0 = hôm nay)', 'price': 'nghìn đồng'}
 # Cột có thể chọn để xếp trong Cài đặt (đủ cột bảng giá + cột kiểu FireAnt)
 SORT_COLUMNS = list(core.COLUMNS) + [(k, conditions.METRIC_LABEL[k]) for k in conditions.METRIC_KEYS]
 
@@ -241,7 +246,9 @@ class App:
         self.error = None
         self.hist_progress = 1.0 if self.hist.get('day') == core.vn_date(time.time()) else 0.0
         self.tech = load_json(TECH_PATH, {})     # thống kê kỹ thuật (RSI, MACD, SMA, đỉnh đáy…) — chỉ tải khi có tiêu chí cần
-        self.tech_progress = 1.0 if self.tech.get('day') == core.vn_date(time.time()) else 0.0
+        self.tech_progress = 1.0 if self.tech_fresh(core.vn_date(time.time())) else 0.0
+        self.intra = load_json(INTRA_PATH, {})   # thống kê nến 15 phút — chỉ tải khi có tiêu chí dùng khung 15 phút
+        self.intra_progress = 1.0 if self.intra_data() else 0.0
         self.stat_note = None   # lý do không dùng được FireAnt cho cột MA (vd cookie hết hạn)
         self.prev_by_key = None      # {khoá tiêu chí: tập mã lượt trước} — để biết mã nào MỚI lọt lọc
         self.new_until = {}
@@ -253,6 +260,8 @@ class App:
         self.wake = threading.Event()
         self.wake_hist = threading.Event()
         self.wake_tech = threading.Event()
+        self.wake_intra = threading.Event()
+        self.force_tech = False       # người dùng bấm "Quét lại trendline / chỉ báo ngay" → bỏ bộ đệm hôm nay, tải lại
         self.drag = None
         self.settings_win = None
 
@@ -268,6 +277,8 @@ class App:
         self.table = tk.Frame(self.frame, bg=BG)
         self.table.pack(fill='x')
         self.table_body = None        # khung bảng hiện tại; vẽ khung mới xong mới thay → không nháy
+        self.table_sig = None         # khuôn bảng đang hiện (khối · cột · số hàng); khuôn y nguyên thì chỉ đổi chữ trong ô
+        self.built = []
         self.msg = tk.Label(self.frame, bg=BG, fg=MUTED, font=('Segoe UI', 9), justify='left',
                             anchor='w', wraplength=300)
         self.msg.pack(fill='x', padx=8, pady=(0, 6))
@@ -281,6 +292,7 @@ class App:
         threading.Thread(target=self.quote_loop, daemon=True).start()
         threading.Thread(target=self.hist_loop, daemon=True).start()
         threading.Thread(target=self.tech_loop, daemon=True).start()
+        threading.Thread(target=self.intra_loop, daemon=True).start()
         self.update_info = None
         if FROZEN:            # chỉ bản .exe tự cập nhật; bản chạy từ mã nguồn thì cập nhật bằng git
             threading.Thread(target=self.update_loop, daemon=True).start()
@@ -338,6 +350,7 @@ class App:
             m.add_separator()
         m.add_command(label='Thu gọn / đầy đủ', command=self.toggle_mode)
         m.add_command(label='Tải lại ngay', command=self.refresh_now)
+        m.add_command(label='Quét lại trendline / chỉ báo ngay', command=self.rescan_tech)
         m.add_command(label='Cài đặt bộ lọc…', command=self.open_settings)
         m.add_command(label='Về góc dưới-phải màn hình', command=self.reset_position)
         m.add_separator()
@@ -400,7 +413,10 @@ class App:
             return
         data = self.hist.get('data', {})
         tech = self.tech_data()
-        rows = [core.transform_quote(q, data.get(q.get('Symbol')), tech.get(q.get('Symbol'))) for q in self.quotes]
+        intra = self.intra_data()
+        rows = [core.transform_quote(q, data.get(q.get('Symbol')), tech.get(q.get('Symbol')),
+                                     intra={'15m': intra[q.get('Symbol')]} if intra.get(q.get('Symbol')) else None)
+                for q in self.quotes]
         all_stocks = core.group_by_exchange(rows)
         sort = {'sortColumn': self.cfg.get('sortColumn'), 'sortDirection': self.cfg.get('sortDirection')}
 
@@ -483,16 +499,37 @@ class App:
             self.pending_say = []
             self.alert([(n, syms, 'speak') for n, syms in merged.items()])
 
+    def tech_fresh(self, today):
+        """Bộ nhớ đệm chỉ báo là của hôm nay và đủ các số thống kê của bản chương trình này."""
+        return self.tech.get('day') == today and self.tech.get('ver') == tech.VERSION
+
     def tech_data(self):
         """Thống kê kỹ thuật của hôm nay (số của hôm qua trở về trước đã cũ: tín hiệu "cắt" sẽ sai → bỏ)."""
-        return self.tech.get('data', {}) if self.tech.get('day') == core.vn_date(time.time()) else {}
+        return self.tech.get('data', {}) if self.tech_fresh(core.vn_date(time.time())) else {}
+
+    def intra_data(self):
+        """Thống kê nến 15 phút của mốc hiện tại; vừa sang mốc mới mà đang tải dở thì tạm dùng bộ của mốc trước.
+        Bộ cũ hơn (máy ngủ, mất mạng lâu) thì bỏ — tín hiệu sẽ sai."""
+        i = self.intra
+        if i.get('ver') == tech.VERSION and (i.get('key') == tech.intraday_key(core.vn_now())
+                                             or time.time() - i.get('at', 0) < INTRA_KEEP_SEC):
+            return i.get('data', {})
+        return {}
 
     def tech_pending(self):
-        """Có tiêu chí cần chỉ báo kỹ thuật mà số liệu chưa tải xong."""
-        return self.tech_progress < 1 and any(core.needs_tech(c) for c in self.cfg['criteria'])
+        """Có tiêu chí cần chỉ báo kỹ thuật / nến 15 phút mà số liệu chưa tải xong."""
+        crits = self.cfg['criteria']
+        return ((self.tech_progress < 1 and any(core.needs_tech(c) for c in crits))
+                or (self.intra_progress < 1 and any(core.needs_intraday(c) for c in crits)))
 
     def tech_note(self):
-        return f'đang tính chỉ báo kỹ thuật {int(self.tech_progress * 100)}%'
+        crits = self.cfg['criteria']
+        notes = []
+        if self.tech_progress < 1 and any(core.needs_tech(c) for c in crits):
+            notes.append(f'đang tính chỉ báo kỹ thuật {int(self.tech_progress * 100)}%')
+        if self.intra_progress < 1 and any(core.needs_intraday(c) for c in crits):
+            notes.append(f'đang tải nến 15 phút {int(self.intra_progress * 100)}%')
+        return ' · '.join(notes)
 
     def ma_source_note(self):
         if self.hist_progress < 1:
@@ -544,18 +581,26 @@ class App:
         else:
             self.filters_lbl.pack_forget()
 
-        # Bảng: mỗi tiêu chí một khối. Dựng khung mới (chưa hiện) rồi mới tháo khung cũ → một lần vẽ, không nháy.
+        # Bảng: mỗi tiêu chí một khối. Khuôn bảng không đổi (giá cập nhật, % đang tính chỉ báo…) → chỉ đổi chữ / màu
+        # trong các ô có sẵn, không dựng lại → không nháy. Khuôn đổi (thêm bớt hàng, cột, khối) mới dựng khung mới
+        # (chưa hiện) rồi tháo khung cũ.
         total = sum(len(m) for _, m in sections)
-        body = tk.Frame(self.table, bg=BG)
-        built = [self._build_section(body, c, m, full, multi) for c, m in blocks]
-        self._align_sections(built)
-        if self.table_body is not None:
-            self.table_body.destroy()
-        body.pack(fill='x')
-        self.table_body = body
-        for b in built:
-            if b.get('canvas') is not None:
-                b['canvas'].yview_moveto(self.scroll_pos.get(b['name'], 0.0))
+        sig = (multi, full, tuple(self._section_sig(c, m, full, multi) for c, m in blocks))
+        if sig == self.table_sig and self.table_body is not None:
+            for info, (c, m) in zip(self.built, blocks):
+                self._fill_section(info, c, m, full, multi)
+            self._align_sections(self.built)
+        else:
+            body = tk.Frame(self.table, bg=BG)
+            built = [self._build_section(body, c, m, full, multi) for c, m in blocks]
+            self._align_sections(built)
+            if self.table_body is not None:
+                self.table_body.destroy()
+            body.pack(fill='x')
+            self.table_body, self.table_sig, self.built = body, sig, built
+            for b in built:
+                if b.get('canvas') is not None:
+                    b['canvas'].yview_moveto(self.scroll_pos.get(b['name'], 0.0))
 
         # Thông điệp
         if self.quotes is None and not self.error:
@@ -582,10 +627,28 @@ class App:
     def section_rows(self, name, multi):
         return int(self.cfg.get('sectionRows', {}).get(name, SECTION_ROWS if multi else MAX_ROWS))
 
-    def _build_section(self, parent, c, matches, full, multi):
-        """Dựng 1 khối: dòng tên (gập/mở, －/＋) → tiêu đề cột (đứng yên) → danh sách mã (cuộn riêng)."""
+    def _section_sig(self, c, matches, full, multi):
+        """Khuôn của 1 khối: giống nhau thì dùng lại được các ô đang hiện, chỉ đổi chữ."""
         name = c['name']
-        info = {'name': name, 'grids': [], 'canvas': None, 'widths': None}
+        if multi and name in self.cfg.get('collapsed', []):
+            return name, 'collapsed'
+        if not matches:
+            return name, 'empty'
+        return (name, tuple(k for k, _ in core.table_columns(c, full)), len(matches), self.section_rows(name, multi))
+
+    def _section_title(self, c, matches, multi):
+        name = c['name']
+        collapsed = name in self.cfg.get('collapsed', [])
+        ex = '' if c.get('watch') else EXCHANGE_LABEL.get(c['exchange'], c['exchange']) + '  ·  '
+        more = f'  ·  lăn ↕ xem đủ' if (not collapsed and len(matches) > self.section_rows(name, multi)) else ''
+        return f'{"▸" if collapsed else "▾"} {name}  ·  {ex}{len(matches)} mã{more}'
+
+    def _build_section(self, parent, c, matches, full, multi):
+        """Dựng 1 khối: dòng tên (gập/mở, －/＋) → tiêu đề cột (đứng yên) → danh sách mã (cuộn riêng).
+        Chỉ dựng khung ô; chữ / màu trong ô do _fill_section điền (lần cập nhật sau chỉ gọi lại _fill_section)."""
+        name = c['name']
+        info = {'name': name, 'grids': [], 'canvas': None, 'widths': None, 'title': None, 'desc': None,
+                'head': [], 'rows': [], 'cols': []}
         box = tk.Frame(parent, bg=BG)
         box.pack(fill='x')
         collapsed = multi and name in self.cfg.get('collapsed', [])
@@ -594,11 +657,9 @@ class App:
         if multi:
             bar = tk.Frame(box, bg=SECTION)
             bar.pack(fill='x', pady=(2, 0))
-            ex = '' if c.get('watch') else EXCHANGE_LABEL.get(c['exchange'], c['exchange']) + '  ·  '
-            more = f'  ·  lăn ↕ xem đủ' if (not collapsed and len(matches) > limit) else ''
-            title = tk.Label(bar, text=f'{"▸" if collapsed else "▾"} {name}  ·  {ex}{len(matches)} mã{more}',
-                             bg=SECTION, fg=GOLD, font=('Segoe UI', 8, 'bold'), anchor='w', padx=8, cursor='hand2')
+            title = tk.Label(bar, bg=SECTION, fg=GOLD, font=('Segoe UI', 8, 'bold'), anchor='w', padx=8, cursor='hand2')
             title.pack(side='left', fill='x', expand=True)
+            info['title'] = title
             title.bind('<Button-1>', lambda e: self.toggle_section(name))
             title.bind('<Button-3>', self.show_menu)
             if not collapsed:
@@ -610,36 +671,33 @@ class App:
                     b.bind('<Enter>', lambda e, w=b: w.config(fg=TEXT))
                     b.bind('<Leave>', lambda e, w=b: w.config(fg=MUTED))
             if collapsed:
+                self._fill_section(info, c, matches, full, multi)
                 return info
             if full and not c.get('watch'):
-                d = tk.Label(box, text=core.describe_filters(c['filters'], c.get('signals')), bg=BG, fg=MUTED,
-                             font=FONT_SMALL, anchor='w', padx=8, wraplength=420, justify='left')
+                d = tk.Label(box, bg=BG, fg=MUTED, font=FONT_SMALL, anchor='w', padx=8, wraplength=420, justify='left')
                 d.pack(fill='x')
                 self._bind_table(d)
+                info['desc'] = d
         if not matches:
             if multi:
                 e = tk.Label(box, text='chưa có mã nào khớp', bg=BG, fg=MUTED, font=FONT_SMALL, anchor='w', padx=8)
                 e.pack(fill='x', pady=(1, 3))
                 self._bind_table(e)
+            self._fill_section(info, c, matches, full, multi)
             return info
 
         cols = core.table_columns(c, full)
-        active = set(core.active_filter_keys(c['filters']))
-        sort_col, sort_dir = self.sort_of(c)
 
         # Tiêu đề cột — nằm ngoài vùng cuộn nên luôn thấy
         head = tk.Frame(box, bg=BG)
         head.pack(fill='x')
         head_cells = []
         for ci, (key, label) in enumerate(cols):
-            arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
-            txt = core.HEAD_LABEL.get(key, label).upper() + (' •' if key in active else '') + arrow
-            fg = FILTERED if key in active else (TEXT if key == sort_col else MUTED)
-            lbl = tk.Label(head, text=txt, bg=BG, fg=fg,
-                           font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
+            lbl = tk.Label(head, bg=BG, font=FONT_HEAD, anchor='w' if ci == 0 else 'e', padx=8, cursor='hand2')
             lbl.grid(row=0, column=ci, sticky='ew', pady=(3, 2))
-            # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ)
-            lbl.bind('<Button-1>', lambda e, k=key, crit=c: self.sort_by(k, crit))
+            # Bấm tiêu đề cột = sắp xếp theo cột đó (bấm vào hàng mới là thu gọn / đầy đủ). Lấy tiêu chí lúc bấm
+            # (info['crit'], _fill_section cập nhật) — khung ô được dùng lại qua nhiều lần cập nhật.
+            lbl.bind('<Button-1>', lambda e, k=key, i=info: self.sort_by(k, i['crit']))
             lbl.bind('<Button-3>', self.show_menu)
             head_cells.append(lbl)
 
@@ -662,30 +720,56 @@ class App:
             for w in (canvas, rows_frame, head) + tuple(head_cells):
                 w.bind('<MouseWheel>', wheel)
 
-        now = time.time()
-        row_cells = []
-        for ri, st in enumerate(matches):
-            bg = NEW_BG if self.new_until.get(st['symbol'], 0) > now else (ALT if ri % 2 == 1 else BG)
+        rows = []
+        for ri in range(len(matches)):
+            cells = []
             for ci, (key, _) in enumerate(cols):
-                text, tone = core.format_cell(st, key)
-                lbl = tk.Label(rows_frame, text=text, bg=bg, fg=TONE.get(tone, TEXT),
-                               font=FONT_BOLD if key == 'symbol' else FONT,
+                lbl = tk.Label(rows_frame, font=FONT_BOLD if key == 'symbol' else FONT,
                                anchor='w' if ci == 0 else 'e', padx=8)
                 lbl.grid(row=ri, column=ci, sticky='ew')
+                cells.append(lbl)
+            rows.append(cells)
+        tk.Frame(box, bg=BG, height=4).pack(fill='x')
+        info.update(grids=[head, rows_frame], head=head_cells, rows=rows, cols=cols, wheel=wheel,
+                    n=len(matches), limit=limit)
+        self._fill_section(info, c, matches, full, multi)
+        return info
+
+    def _fill_section(self, info, c, matches, full, multi):
+        """Điền chữ / màu vào các ô của 1 khối đã dựng (_build_section) rồi đo lại bề ngang cột."""
+        info['crit'] = c
+        if info['title'] is not None:
+            info['title'].config(text=self._section_title(c, matches, multi))
+        if info['desc'] is not None:
+            info['desc'].config(text=core.describe_filters(c['filters'], c.get('signals')))
+        if not info['rows']:
+            return
+        cols = info['cols']
+        active = set(core.active_filter_keys(c['filters']))
+        sort_col, sort_dir = self.sort_of(c)
+        for (key, label), lbl in zip(cols, info['head']):
+            arrow = (' ▲' if sort_dir == 'asc' else ' ▼') if key == sort_col else ''
+            lbl.config(text=core.HEAD_LABEL.get(key, label).upper() + (' •' if key in active else '') + arrow,
+                       fg=FILTERED if key in active else (TEXT if key == sort_col else MUTED))
+        now = time.time()
+        wheel = info['wheel']
+        for ri, (st, cells) in enumerate(zip(matches, info['rows'])):
+            bg = NEW_BG if self.new_until.get(st['symbol'], 0) > now else (ALT if ri % 2 == 1 else BG)
+            for (key, _), lbl in zip(cols, cells):
+                text, tone = core.format_cell(st, key)
+                lbl.config(text=text, bg=bg, fg=TONE.get(tone, TEXT))
                 self._bind_table(lbl, st['symbol'])      # chuột phải lên hàng: theo dõi / bỏ theo dõi mã này
                 if wheel:
                     lbl.bind('<MouseWheel>', wheel)
-                row_cells.append((ci, lbl))
-        tk.Frame(box, bg=BG, height=4).pack(fill='x')
 
         # Đo bề ngang từng cột (lấy max của tiêu đề + mọi hàng) để tiêu đề và hàng thẳng cột với nhau
-        widths = [lbl.winfo_reqwidth() for lbl in head_cells]
+        widths = [lbl.winfo_reqwidth() for lbl in info['head']]
         row_h = 0
-        for ci, lbl in row_cells:
-            widths[ci] = max(widths[ci], lbl.winfo_reqwidth())
-            row_h = max(row_h, lbl.winfo_reqheight())
-        info.update(widths=widths, grids=[head, rows_frame], row_h=row_h, n=len(matches), limit=limit)
-        return info
+        for cells in info['rows']:
+            for ci, lbl in enumerate(cells):
+                widths[ci] = max(widths[ci], lbl.winfo_reqwidth())
+                row_h = max(row_h, lbl.winfo_reqheight())
+        info.update(widths=widths, row_h=row_h)
 
     def _align_sections(self, built):
         """Đặt bề ngang cột cho từng khối; khối hẹp được kéo cột cuối cho bằng khối rộng nhất."""
@@ -802,6 +886,17 @@ class App:
         self.meta.config(text='đang tải…')
         self.wake.set()
 
+    def rescan_tech(self):
+        """Tải lại nến cả thị trường, kẻ lại trendline / tính lại chỉ báo (kể cả quét lùi) ngay, khỏi chờ lượt mỗi ngày.
+        Số cũ vẫn dùng tới khi tính xong."""
+        if not any(core.needs_tech(c) for c in self.cfg['criteria']):
+            messagebox.showinfo(APP_NAME, 'Chưa có tiêu chí nào dùng trendline / chỉ báo kỹ thuật để quét.')
+            return
+        self.force_tech = True
+        self.tech_progress = 0.0
+        self.render()
+        self.wake_tech.set()
+
     def keep_on_top(self):
         # Vài thao tác của Windows (bấm taskbar, mở app toàn màn hình rồi thoát) làm cửa sổ tụt xuống.
         try:
@@ -908,17 +1003,45 @@ class App:
             try:
                 if any(core.needs_tech(c) for c in self.cfg['criteria']):
                     today = core.vn_date(time.time())
-                    cur = self.tech if self.tech.get('day') == today else {'day': today, 'data': {}}
+                    # Có tiêu chí lọc theo phiên vượt trendline mà bộ đệm hôm nay chưa quét lùi → tải lại từ đầu
+                    bt = any(core.needs_break_history(c) for c in self.cfg['criteria'])
+                    fresh = self.tech_fresh(today) and (self.tech.get('bt') or not bt) and not self.force_tech
+                    self.force_tech = False
+                    cur = self.tech if fresh else {'day': today, 'ver': tech.VERSION, 'bt': bt, 'data': {}}
                     if len(cur['data']) < len(SYMBOLS):
-                        data = core.fetch_all_tech(SYMBOLS, today, cur['data'],
+                        data = core.fetch_all_tech(SYMBOLS, today, cur['data'], history=cur.get('bt', False),
                                                    on_progress=lambda p: self.q.put(('tech_progress', p)))
-                        cur = {'day': today, 'data': data}
+                        cur = {'day': today, 'ver': tech.VERSION, 'bt': cur.get('bt', False), 'data': data}
                         save_json(TECH_PATH, cur)
                         self.q.put(('tech', cur, len(data) / len(SYMBOLS)))
             except Exception:
                 log('tech: ' + traceback.format_exc())
             self.wake_tech.wait(HIST_CHECK_SEC)
             self.wake_tech.clear()
+
+    def intra_loop(self):
+        """Nến 15 phút cả thị trường (~30 s) cho tín hiệu khung 15 phút: tải lại ngay sau mỗi lần chốt nến (mốc
+        tech.intraday_key đổi; nghỉ trưa / ngoài giờ thì đứng yên), chỉ khi có tiêu chí cần. Mã lỗi mạng thì lần sau thử lại."""
+        while True:
+            try:
+                if any(core.needs_intraday(c) for c in self.cfg['criteria']):
+                    now = core.vn_now()
+                    key = tech.intraday_key(now)
+                    same = self.intra.get('key') == key and self.intra.get('ver') == tech.VERSION
+                    done = self.intra.get('data', {}) if same else {}
+                    if len(done) < len(SYMBOLS):
+                        first = not self.intra_data()       # chưa có bộ nào dùng được → hiện % đang tải
+                        data = core.fetch_all_intraday(
+                            SYMBOLS, now, done,
+                            on_progress=(lambda p: self.q.put(('intra_progress', p))) if first else None)
+                        cur = {'key': key, 'ver': tech.VERSION, 'at': time.time(), 'data': data}
+                        save_json(INTRA_PATH, cur)
+                        self.q.put(('intra', cur, len(data) / len(SYMBOLS)))
+            except Exception:
+                log('intra: ' + traceback.format_exc())
+            period = tech.INTRA_MIN * 60
+            self.wake_intra.wait(period - time.time() % period + INTRA_DELAY_SEC)
+            self.wake_intra.clear()
 
     def listen_loop(self, lock):
         """Nghe bản thứ hai (người dùng bấm biểu tượng khi đang chạy) nhắn "show"."""
@@ -1056,6 +1179,18 @@ class App:
                     self.compute()
                 elif kind == 'tech_progress':
                     self.tech_progress = payload[0]
+                    if not self.tech_pending():
+                        continue
+                elif kind == 'intra':
+                    first = not self.intra_data()
+                    self.intra, self.intra_progress = payload
+                    # Nến 15 phút vừa có lần đầu → cả loạt mã bỗng khớp, không phải "mã mới lọt lọc" → lấy lại mốc so.
+                    # Các lần chốt nến sau: mã mới khớp là tín hiệu thật → báo như thường.
+                    if first:
+                        self.prev_by_key = None
+                    self.compute()
+                elif kind == 'intra_progress':
+                    self.intra_progress = payload[0]
                     if not self.tech_pending():
                         continue
                 elif kind == 'update':
@@ -1240,7 +1375,8 @@ class SettingsWindow:
         """Bộ chọn trong cột phải: chọn nhóm → điều kiện → đặt giá trị → ＋ Thêm (điều kiện hiện ở danh sách bên trái)."""
         ttk.Label(p, text='Thêm điều kiện', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
         ttk.Label(p, text='Chọn nhóm → điều kiện → đặt giá trị → ＋ Thêm.\nĐiều kiện sẽ hiện ở danh sách bên trái.\n'
-                          'Cần lịch sử giá (RSI, MACD, SMA, đỉnh/đáy…): lần đầu dùng sẽ tải ~1 phút.',
+                          'Cần lịch sử giá (RSI, MACD, SMA, pullback, đỉnh/đáy…): lần đầu dùng sẽ tải ~1 phút.\n'
+                          'Khung 15 phút: xét nến đã chốt, tự tải lại mỗi 15 phút.',
                   foreground='#666', wraplength=390, justify='left').pack(anchor='w', pady=(2, 6))
         self.catalog = conditions.catalog()
         self.group_ids = [g for g, _ in conditions.GROUPS]
@@ -1279,7 +1415,7 @@ class SettingsWindow:
         n = 0                                   # số dòng ô nhập đã dựng
         if kind == 'metric':
             op = ttk.Combobox(f, state='readonly', width=14, values=[n_ for _, n_ in METRIC_OP_LABEL])
-            op.current(0)
+            op.current(1 if conditions.METRIC_FMT[key] == 'ago' else 0)      # "vượt trong N phiên qua" → Đến (≤)
             op.grid(row=0, column=0, sticky='w', pady=2)
             v1 = ttk.Entry(f, width=12)
             v1.grid(row=0, column=1, sticky='w', padx=(6, 0))
@@ -1498,6 +1634,7 @@ class SettingsWindow:
         self.app.hist['source'] = None   # đổi sheet → thử lại FireAnt ngay
         self.app.wake_hist.set()
         self.app.wake_tech.set()         # vừa thêm điều kiện cần chỉ báo kỹ thuật → bắt đầu tải ngay
+        self.app.wake_intra.set()
         if self.startup.get() != has_startup():
             if self.startup.get():
                 make_shortcut('Startup')

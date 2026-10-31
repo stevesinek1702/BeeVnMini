@@ -111,6 +111,249 @@ def sig(id_, **params):
     return conditions.normalize_signal({'id': id_, 'params': params})
 
 
+class MaDai(unittest.TestCase):
+    """SMA / EMA 50, 100, 200."""
+    def stats(self, n, close):
+        return stats_of(n, close=close)[0]
+
+    def test_gia_cat_len_ma_dai(self):
+        # Giá đi ngang 10 suốt 250 phiên (đóng cửa hôm qua = 10 = đúng SMA) → hôm nay 11 là cắt lên cả 3 đường
+        st = self.stats(250, lambda i: 10)
+        for n in (50, 100, 200):
+            self.assertAlmostEqual(st[f'p{n}'], 10)
+            self.assertAlmostEqual(st[f'e{n}'], 10)
+            for sid in ('PriceCrossAboveSMA', 'PriceCrossAboveEMA'):
+                sig = {'id': sid, 'params': {'period': n}}
+                self.assertTrue(conditions.eval_signal(sig, st, {'last': 11}), (sid, n))
+                self.assertFalse(conditions.eval_signal(sig, st, {'last': 9}), (sid, n))
+        # SMA50 cắt lên SMA200: chuẩn hoá giữ nguyên tham số mới
+        s = conditions.normalize_signal({'id': 'ShortSMACrossAboveLongSMA', 'params': {'short': 50, 'long': 200}})
+        self.assertEqual(s['params'], {'short': 50, 'long': 200})
+
+    def test_chua_du_phien_thi_khong_tinh(self):
+        st = self.stats(120, lambda i: 10)
+        self.assertIsNotNone(st['p100'])
+        self.assertIsNone(st['p200'])
+        self.assertFalse(conditions.eval_signal({'id': 'PriceCrossAboveSMA', 'params': {'period': 200}}, st, {'last': 11}))
+
+
+def ohlc_stats(closes, lows=None, highs=None, vols=None, history=False):
+    """Thống kê từ chuỗi giá tự đặt (mặc định thấp / cao = đóng cửa ∓ 0.1, KL 1000), ngày bắt đầu 1/1/2026."""
+    n = len(closes)
+    days = [(date(2026, 1, 1) + timedelta(days=i)).isoformat() for i in range(n)]
+    bars = {'s': 'ok', 't': days, 'o': closes, 'h': highs or [c + .1 for c in closes],
+            'l': lows or [c - .1 for c in closes], 'c': closes, 'v': vols or [1000] * n}
+    today = (date.fromisoformat(days[-1]) + timedelta(days=1)).isoformat()
+    return tech.stats_from_bars(bars, today, keep, history), days
+
+
+class Pullback(unittest.TestCase):
+    # Tăng đều 60 phiên (10 → 21.8, SMA20 hôm qua ≈ 20.47, đỉnh cách SMA ~10%) rồi chỉnh 5 phiên về sát SMA20
+    RISE = [10 + .2 * i for i in range(60)]
+    DIP = [21.2, 20.8, 20.5, 20.4, 20.5]
+
+    def ev(self, id_, st, live, **params):
+        return conditions.eval_signal(sig(id_, **params), st, live)
+
+    def test_sma_dang_kiem_dinh(self):
+        st, _ = ohlc_stats(self.RISE + self.DIP, vols=[1000] * 60 + [500] * 5)
+        self.assertEqual(st['pb20']['pk'], 5)
+        self.assertEqual(st['pb20']['vpb'], 500)
+        ma = conditions.sma_live(st, 20.6, 20)                 # ≈ 20.55
+        self.assertTrue(self.ev('PullbackToSMA', st, lv(20.6, low=20.45, est=500), period=20))
+        self.assertTrue(self.ev('PullbackToSMA', st, lv(20.6, low=20.45, est=500), period=20, tol=1, dry='không'))
+        self.assertFalse(self.ev('PullbackToSMA', st, lv(ma * .97, low=ma * .96, est=500), period=20))   # rơi khỏi vùng
+        self.assertFalse(self.ev('PullbackToSMA', st, lv(21.5, low=21.3, est=500), period=20))         # còn xa SMA
+        # KL không cạn (KL dự kiến hôm nay lớn kéo TB lên trên KLTB 20)
+        self.assertFalse(self.ev('PullbackToSMA', st, lv(20.6, low=20.45, est=5000), period=20))
+        self.assertTrue(self.ev('PullbackToSMA', st, lv(20.6, low=20.45, est=5000), period=20, dry='không'))
+        self.assertTrue(self.ev('PullbackToSMA', st, lv(20.6, low=20.45, est=None), period=20))     # chưa mở cửa: KL sau đỉnh
+        # Cột khoảng cách tới SMA20 (%)
+        self.assertAlmostEqual(conditions.tech_metrics(st, 20.6, .1)['distSMA20'], (20.6 / ma - 1) * 100)
+
+    def test_sma_khong_phai_xu_huong_tang(self):
+        down, _ = ohlc_stats([30 - .2 * i for i in range(60)] + [17.9, 18.0, 18.1, 18.0, 18.1])
+        self.assertFalse(self.ev('PullbackToSMA', down, lv(18.0, low=17.8, est=1000), period=20, dry='không'))
+        flat, _ = ohlc_stats([10 + .01 * i for i in range(65)])     # dốc lên nhẹ, ôm sát MA → chưa từng "đi xa"
+        last = conditions.sma_live(flat, 10.64, 20)
+        self.assertFalse(self.ev('PullbackToSMA', flat, lv(last, low=last, est=1000), period=20, dry='không'))
+
+    def test_sma_da_dong_cua_thung_sau_dinh(self):
+        st, _ = ohlc_stats(self.RISE + [21.2, 19.0, 20.5, 20.4, 20.5])     # 1 phiên đóng cửa dưới SMA ~7%
+        self.assertLess(st['pb20']['mr'], .95)
+        self.assertFalse(self.ev('PullbackToSMA', st, lv(20.6, low=20.45, est=500), period=20, tol=5, dry='không'))
+
+    def test_sma_bat_len(self):
+        st, _ = ohlc_stats(self.RISE + self.DIP, vols=[1000] * 60 + [500] * 5)
+        self.assertLess(st['pb20']['lr'], 1)                        # hôm qua giá thấp đã chạm SMA20
+        live = lv(20.9, low=20.7, est=500)                          # hôm nay xanh, trên SMA, giá thấp không chạm lại
+        self.assertTrue(self.ev('PullbackBounceSMA', st, live, period=20))
+        self.assertFalse(self.ev('PullbackToSMA', st, live, period=20, tol=.5))
+        self.assertFalse(self.ev('PullbackBounceSMA', st, lv(20.45, low=20.4, est=500), period=20))   # đỏ
+        # Lần chạm cách đây 4 phiên, 2 phiên gần nhất đã bật xa khỏi vùng → không còn tính
+        far, _ = ohlc_stats(self.RISE + [21.2, 20.6, 20.45, 21.4, 21.6], vols=[1000] * 60 + [500] * 5)
+        self.assertGreater(far['pb20']['lr'], 1.02)
+        self.assertFalse(self.ev('PullbackBounceSMA', far, lv(21.8, low=21.6, est=500), period=20))
+
+    @staticmethod
+    def dist(i, mid=1.5):
+        """Khoảng cách giá đóng cửa tới đường: 0 ở ngày 10, 25, 40 (3 lần chạm), cao `mid` ở giữa (2 nhịp: số hoặc
+        cặp số); sau đó xa dần tới 3 ở ngày 70 rồi quay về sát đường."""
+        if i < 10:
+            return .1 * (10 - i)
+        if i <= 40:
+            h = mid[min((i - 10) // 15, 1)] if isinstance(mid, tuple) else mid
+            return h * (1 - abs((i - 10) % 15 - 7.5) / 7.5)
+        if i <= 70:
+            return .1 * (i - 40)
+        return 3 - .1 * (i - 70)
+
+    def zigzag(self, n=100, mid=1.5):
+        """Giá đóng cửa chạm đường 10 + 0.05·i ở ngày 10, 25, 40, lên xa đường tới ngày 70 rồi chỉnh về sát đường.
+        Trả (đóng cửa, thấp, cao)."""
+        closes = [10 + .05 * i + self.dist(i, mid) for i in range(n)]
+        return closes, [x - .05 for x in closes], [x + .05 for x in closes]
+
+    def zigzag_down(self, n=100, mid=2):
+        """Lật ngược zigzag: giá đóng cửa chạm đường 30 − 0.05·i ở ngày 10, 25, 40, xuống xa đường rồi hồi sát đường."""
+        closes = [30 - .05 * i - self.dist(i, mid) for i in range(n)]
+        return closes, [x - .05 for x in closes], [x + .05 for x in closes]
+
+    def test_trendline_tu_ve(self):
+        closes, lows, highs = self.zigzag()
+        st, days = ohlc_stats(closes, lows, highs)
+        tl = st['tl6m']
+        self.assertEqual((tl['a'], tl['b'], tl['e']), (days[10], days[40], days[40]))
+        self.assertAlmostEqual(tl['v'], 14.95)                     # 10 + 0.05·99
+        self.assertAlmostEqual(tl['s'], .05)
+        self.assertEqual(tl['t'], 3)
+        self.assertEqual(tl['pk'], 29)                             # đỉnh ngày 70
+        self.assertIsNone(st['tl3m'])                              # 60 phiên gần nhất chỉ còn 1 đáy
+        # Hôm nay đường ở 15.0
+        self.assertTrue(self.ev('PullbackToTrendline', st, lv(15.1, low=15.02), period='6m', dry='không'))
+        self.assertFalse(self.ev('PullbackToTrendline', st, lv(15.1, low=15.02), period='6m'))       # KL không cạn
+        self.assertFalse(self.ev('PullbackToTrendline', st, lv(14.5, low=14.4), period='6m', dry='không'))
+        self.assertTrue(self.ev('PullbackBounceTrendline', st, lv(15.2, low=15.1), period='6m', dry='không'))
+        self.assertFalse(self.ev('PullbackBounceTrendline', st, lv(15.0, low=14.98), period='6m', dry='không'))
+
+    def test_trendline_bi_thung_hoac_thieu_phien(self):
+        closes, lows, highs = self.zigzag()
+        y = 10 + .05 * 97
+        closes[97], lows[97] = y * .97, y * .96               # 1 phiên đóng cửa thủng đường 3%
+        st, _ = ohlc_stats(closes, lows, highs)
+        self.assertIsNone(st['tl6m'])
+        st, _ = ohlc_stats(*self.zigzag(35))
+        self.assertIsNone(st['tl6m'])
+        # Chỉ 2 điểm chạm (bỏ lần chạm ngày 25) → chưa đủ 3 điểm, không vẽ
+        closes, lows, highs = self.zigzag()
+        for i in range(20, 31):
+            closes[i] += 1
+        st, _ = ohlc_stats(closes, lows, highs)
+        self.assertIsNone(st['tl6m'])
+
+    def test_trendline_lech_2_phan_tram_van_tinh(self):
+        closes, lows, highs = self.zigzag()
+        y = 10 + .05 * 25
+        closes[25] = y * .985                                       # lần chạm thứ 3 xuyên đường 1,5% → vẫn là 1 đường
+        st, days = ohlc_stats(closes, lows, highs)
+        self.assertEqual((st['tl6m']['a'], st['tl6m']['b'], st['tl6m']['t']), (days[10], days[40], 3))
+
+    def test_trendline_tang_can_dinh_cao_dan(self):
+        # Đỉnh giữa các đáy ≈ 17.4 rồi 17.2, đỉnh sau đáy cuối chỉ ≈ 16.55 → đáy cao dần nhưng đỉnh thấp dần
+        st, _ = ohlc_stats(*self.zigzag(mid=(7, 6)))
+        self.assertIsNone(st['tl6m'])
+
+    def test_vuot_len_trendline_giam(self):
+        closes, lows, highs = self.zigzag_down()
+        st, days = ohlc_stats(closes, lows, highs)
+        td = st['td6m']
+        self.assertEqual((td['a'], td['b'], td['t']), (days[10], days[40], 3))
+        self.assertAlmostEqual(td['v'], 25.05)                     # 30 − 0.05·99
+        self.assertAlmostEqual(td['s'], -.05)
+        self.assertEqual(len(td['cr']), tech.TL_RECENT)
+        self.assertIsNone(st['tl6m'])                              # đỉnh thấp dần → không có trendline tăng
+        # Hôm nay đường ở 25.0: vượt ≥ 1% là từ 25.25
+        brk = lambda last, est, **p: self.ev('BreakDownTrendline', st, lv(last, est=est), period='6m', **p)
+        self.assertTrue(brk(25.3, 2000))
+        self.assertFalse(brk(25.1, 2000))                         # mới nhích qua đường, chưa đủ 1%
+        self.assertFalse(brk(25.3, 500))                          # KL thấp
+        self.assertTrue(brk(25.3, 500, vol='không'))
+        self.assertTrue(brk(25.1, 2000, brk=0))
+        # Chưa vượt thì chưa có nhịp pullback sau vượt
+        self.assertFalse(self.ev('PullbackBrokenDownTrendline', st, lv(25.1, low=25.0), period='6m'))
+        # Giữa các lần chạm giá chỉ lùi dưới đường ~3% (chưa đủ 5%) → đường chưa có ý nghĩa, không vẽ
+        st, _ = ohlc_stats(*self.zigzag_down(mid=.8))
+        self.assertIsNone(st['td6m'])
+
+    def retest(self, fail=False, history=False):
+        """Trendline giảm như trên; ngày 95 đóng cửa vượt đường 3%, lùi về, ngày 98 giá thấp chạm lại đường."""
+        closes, lows, highs = self.zigzag_down()
+        y = lambda i: 30 - .05 * i
+        for i, r in zip(range(93, 100), (.99, .995, 1.03, 1.04, .97 if fail else 1.025, 1.01, 1.012)):
+            closes[i], lows[i], highs[i] = y(i) * r, y(i) * r - .05, y(i) * r + .05
+        lows[98] = y(98) * 1.003
+        return ohlc_stats(closes, lows, highs, history=history)
+
+    def test_pullback_sau_khi_vuot_trendline_giam(self):
+        st, days = self.retest()
+        td = st['td6m']
+        self.assertEqual((td['a'], td['b']), (days[10], days[40]))      # đỉnh mới sau khi vượt không làm điểm nối
+        ev = lambda id_, last, low: self.ev(id_, st, lv(last, low=low), period='6m')
+        # Hôm nay đường ở 25.0; hôm qua đóng cửa 25.35
+        self.assertTrue(ev('BounceBrokenDownTrendline', 25.6, 25.3))        # hôm qua chạm, hôm nay xanh trên đường
+        self.assertFalse(ev('BounceBrokenDownTrendline', 25.2, 25.1))       # đỏ
+        self.assertTrue(ev('PullbackBrokenDownTrendline', 25.2, 25.1))      # đang về sát đường
+        self.assertFalse(ev('PullbackBrokenDownTrendline', 26.0, 25.8))     # còn xa đường
+        self.assertFalse(ev('PullbackBrokenDownTrendline', 24.0, 23.9))     # rơi lại dưới đường quá 2%
+        self.assertFalse(self.ev('BreakDownTrendline', st, lv(26, est=5000), period='6m'))   # đã vượt từ trước
+        # Vượt hụt: sau phiên vượt có phiên đóng cửa rơi xuống dưới đường 3%
+        st, _ = self.retest(fail=True)
+        self.assertFalse(self.ev('BounceBrokenDownTrendline', st, lv(25.6, low=25.3), period='6m'))
+        self.assertFalse(self.ev('PullbackBrokenDownTrendline', st, lv(25.2, low=25.1), period='6m'))
+
+    def test_quet_lui_phien_vuot_trendline_giam(self):
+        st, days = self.retest(history=True)
+        self.assertEqual((st['tb6m']['k'], st['tb6m']['d']), (5, days[95]))     # ngày 95 = 5 phiên trước hôm nay
+        m = conditions.tech_metrics(st, 25.6, .2, 1000)
+        self.assertEqual((m['brkTL6m'], m['brkTL6mDay']), (5, days[95][8:] + '/' + days[95][5:7]))
+        self.assertEqual(core.format_cell(m, 'brkTL6m'), (days[95][8:] + '/' + days[95][5:7], ''))
+        self.assertIsNone(m['brkTL3m'])                            # 60 phiên gần nhất không có trendline giảm
+        # Giá vượt = giá đóng cửa ngày 95 (đường 25.25 × 1.03); % hiện tại so với giá đó
+        self.assertAlmostEqual(m['brkTL6mPx'], 25.25 * 1.03)
+        self.assertAlmostEqual(m['brkTL6mPct'], (25.6 / (25.25 * 1.03) - 1) * 100)
+        self.assertEqual(core.format_cell(m, 'brkTL6mPct'), ('-1.57%', 'down'))
+        self.assertIsNone(m['brkTL3mPx'])
+        # Lọc 1 cột trong nhóm thì cả nhóm (phiên vượt · giá vượt · %) cùng hiện, đúng thứ tự
+        cols = [k for k, _ in core.extra_columns({'brkTL6mPct': {'operator': 'le', 'value': 5}})]
+        self.assertEqual(cols, ['brkTL6m', 'brkTL6mPx', 'brkTL6mPct'])
+        self.assertTrue(core.needs_break_history({'filters': {'brkTL6mPx': {'operator': 'ge', 'value': 1}}}))
+        # Phiên vượt KL thấp hơn KLTB 20 thì không tính
+        closes, lows, highs = self.zigzag_down()
+        y = lambda i: 30 - .05 * i
+        closes[95] = y(95) * 1.03
+        st, _ = ohlc_stats(closes, lows, highs, vols=[1000] * 95 + [500] + [1000] * 4, history=True)
+        self.assertIsNone(st['tb6m'])
+        # Chưa vượt phiên nào: hôm nay vượt (KL dự kiến đủ) → 0, hiện "hôm nay"; không bật quét lùi thì không có số cũ
+        st, _ = ohlc_stats(*self.zigzag_down(), history=True)
+        self.assertIsNone(st['tb6m'])
+        m = conditions.tech_metrics(st, 25.3, .3, 2000)
+        self.assertEqual(m['brkTL6m'], 0)
+        self.assertEqual(core.format_cell(m, 'brkTL6m'), ('hôm nay', 'up'))
+        self.assertEqual((m['brkTL6mPx'], m['brkTL6mPct']), (25.3, 0))          # vượt hôm nay: giá vượt = giá hiện tại
+        self.assertIsNone(conditions.tech_metrics(st, 25.3, .3, 500)['brkTL6m'])
+        self.assertNotIn('tb6m', ohlc_stats(*self.zigzag_down())[0])
+
+    def test_tham_so_va_mo_ta(self):
+        s = conditions.normalize_signal({'id': 'PullbackToSMA', 'params': {'period': 50, 'tol': 1.5, 'dry': 'không'}})
+        self.assertEqual(s['params'], {'period': 50, 'tol': 1.5, 'dry': 'không'})
+        self.assertEqual(sig('PullbackToSMA', period=7, dry='?')['params'], {'period': 20, 'tol': 2, 'dry': 'có'})
+        self.assertEqual(conditions.describe_signal(s), 'Pullback về SMA(50), vùng ±1.5%, KL cạn: không')
+        self.assertEqual(conditions.describe_signal(sig('PullbackBounceTrendline', period='3m')),
+                         'Bật lên từ trendline tăng 3 tháng, vùng ±2%, KL cạn: có')
+        self.assertIn(('Pullback về SMA(…), vùng ±…%, KL cạn: …', 'signal', 'PullbackToSMA'),
+                      conditions.catalog()['pullback'])
+
+
 class TinHieu(unittest.TestCase):
     def ev(self, s, st, live):
         return conditions.eval_signal(s, st, live)
@@ -236,7 +479,7 @@ class TinHieu(unittest.TestCase):
         cat = conditions.catalog()
         self.assertEqual(list(cat), [g for g, _ in conditions.GROUPS])
         self.assertTrue(all(cat.values()))                                  # nhóm nào cũng có điều kiện
-        self.assertEqual(sum(len(v) for v in cat.values()), 16 + 35)        # 16 cột số + 35 tín hiệu
+        self.assertEqual(sum(len(v) for v in cat.values()), 24 + 43)        # 24 cột số + 43 tín hiệu
         self.assertEqual(cat['price'][0], ('Thay đổi giá 1 tuần (%)', 'metric', 'change1w'))     # cột số trước tín hiệu
         self.assertIn(('Giá cắt lên SMA(…)', 'signal', 'PriceCrossAboveSMA'), cat['ma'])
         self.assertIn(('MACD cắt lên đường 0', 'signal', 'MACDCrossAboveZeroLine'), cat['macd'])
@@ -244,13 +487,104 @@ class TinHieu(unittest.TestCase):
         self.assertEqual(conditions.param_text(70.0), '70')
         self.assertEqual(conditions.param_text(3.5), '3.5')
 
-    def test_danh_muc_du_35_tin_hieu(self):
-        self.assertEqual(len(conditions.SIGNAL_LIST), 35)
+    def test_danh_muc_du_43_tin_hieu(self):
+        self.assertEqual(len(conditions.SIGNAL_LIST), 43)
         groups = {g for g, _ in conditions.GROUPS}
         for s in conditions.SIGNAL_LIST:
             self.assertIn(s.group, groups)
             for p in s.params:                           # mặc định phải nằm trong danh sách chọn
                 self.assertIn(p.default, p.choices)
+
+
+class RsiTaoDay(unittest.TestCase):
+    """RSI tạo đáy (luật Long hệ phái sinh của anh) + chọn khung 15 phút / ngày. Đã đối chiếu với code pandas bên hệ
+    phái sinh trên nến 15 phút thật (9 mã × 120 nến, 0 lệch)."""
+    # RSI 30 nến 15 phút đã chốt: rơi xuống đáy 23 (13 nến trước) rồi đi lên 44
+    RS = [50] * 10 + [45, 40, 35, 30, 26, 24, 23, 25, 27, 29, 31, 33, 35, 37, 38, 39, 40, 41, 42, 44]
+
+    def ev15(self, rs=None, lc=11, p10=10, **params):
+        st = {'rs': self.RS if rs is None else rs, 'lc': lc, 'p10': p10}
+        return conditions.eval_signal(sig('RSIBottom', tf='15m', **params), None, {**lv(lc), 'intra': {'15m': st}})
+
+    def test_du_3_dau_hieu_khung_15_phut(self):
+        self.assertTrue(self.ev15())
+        self.assertFalse(self.ev15(look=8))                       # đáy 23 nằm ngoài 8 nến gần nhất
+        self.assertFalse(self.ev15(rs=self.RS[:-1] + [29]))       # RSI chưa thoát vùng 30
+        self.assertFalse(self.ev15(rs=self.RS[:-1] + [31]))       # thoát 30 nhưng tụt dưới Signal (WMA14 ≈ 36.3)
+        self.assertFalse(self.ev15(lc=9.9))                       # giá dưới MA10
+        self.assertTrue(self.ev15(level=25))                      # đáy 23 ≤ 25, RSI 44 > 25
+        self.assertFalse(self.ev15(level=20))                     # đáy chưa xuống tới 20
+        self.assertFalse(self.ev15(rs=self.RS[-10:]))             # thiếu nến (WMA14 cần 14 RSI)
+        # Khung 15 phút chỉ đọc thống kê nến 15 phút: chưa tải (hoặc mã ít nến) thì không khớp
+        s = sig('RSIBottom', tf='15m')
+        self.assertFalse(conditions.eval_signal(s, {'rs': self.RS, 'lc': 11, 'p10': 10}, lv(11)))
+        self.assertFalse(conditions.eval_signal(s, {'lc': 1}, {**lv(11), 'intra': {'15m': {}}}))
+
+    def test_khung_ngay_ghep_gia_hien_tai_khop_voi_nen_da_chot(self):
+        # Rơi đều 60 nến rồi tăng 3 nến (RSI ≈ 28.6): giá hiện tại quyết định nến thứ 4 có đủ 3 dấu hiệu không.
+        # Khung ngày (ghép giá hiện tại) phải cho đúng kết quả như khi giá đó đã là nến chốt (cách tính khung 15 phút).
+        closes = [60 - .5 * i for i in range(60)] + [30.5 + .8 * j for j in range(1, 4)]
+        bars, days = make_bars(len(closes), close=lambda i: closes[i])
+        st = tech.stats_from_bars(bars, (date.fromisoformat(days[-1]) + timedelta(days=1)).isoformat(), keep)
+        seen = set()
+        for live in (31.5, 32.4, 32.9, 33.3, 33.7, 35):
+            c = closes + [live]
+            intra = tech.intraday_stats({'s': 'ok', 't': list(range(len(c))), 'o': c, 'h': c, 'l': c, 'c': c,
+                                         'v': [1] * len(c)})
+            want = conditions.eval_signal(sig('RSIBottom', tf='15m'), None, {**lv(live), 'intra': {'15m': intra}})
+            self.assertEqual(conditions.eval_signal(sig('RSIBottom', tf='D'), st, lv(live)), want, live)
+            seen.add(want)
+        self.assertEqual(seen, {True, False})                    # có cả ca khớp lẫn không khớp
+
+    def test_rsi_tung_nen_khop_wilder(self):
+        closes = [10 + (i % 7) - (i % 3) * .5 for i in range(60)]
+        rs = tech.rsi_tail(closes)
+        self.assertEqual(len(rs), tech.RSI_KEEP)
+        self.assertAlmostEqual(rs[-1], tech.rsi_of(*tech.wilder_rsi_parts(closes)))
+        self.assertAlmostEqual(rs[-2], tech.rsi_of(*tech.wilder_rsi_parts(closes[:-1])))
+        self.assertEqual(tech.rsi_tail(closes[:14]), [])
+        self.assertEqual(len(stats_of(60)[0]['rs']), tech.RSI_KEEP)        # nến ngày cũng giữ RSI từng nến
+
+    def test_nen_15_phut_da_chot(self):
+        at = lambda d, h, m: datetime(2026, 10, d, h, m, 30, tzinfo=VN)     # 29/10 thứ Năm, 31/10 thứ Bảy
+        cut = lambda *a: tech.intraday_cutoff(at(*a))
+        self.assertEqual(cut(29, 9, 7), at(29, 9, 0).replace(second=0))
+        self.assertEqual(cut(29, 11, 29), at(29, 11, 15).replace(second=0))
+        self.assertEqual(cut(29, 14, 50), at(29, 14, 45).replace(second=0))  # nến ATC chờ tới 15:00
+        for a in ((29, 8, 50), (29, 11, 30), (29, 12, 59), (29, 15, 0), (31, 10, 0)):
+            self.assertIsNone(cut(*a), a)
+        key = lambda *a: tech.intraday_key(at(*a))
+        self.assertEqual(key(29, 9, 7), '2026-10-29 09:00')
+        self.assertEqual(key(29, 12, 0), '2026-10-29 11:30')                # nghỉ trưa: đã có nến 11:15 chốt
+        self.assertEqual(key(29, 20, 0), '2026-10-29 15:00')
+        self.assertEqual(key(29, 8, 0), '2026-10-29 00:00')
+        self.assertEqual(key(31, 10, 0), '2026-10-31 00:00')
+        # Nến có giờ mở từ cutoff trở đi (đang chạy) bị bỏ; None = mọi nến; quá ít nến → None
+        c = [10 + i % 5 for i in range(70)]
+        bars = {'s': 'ok', 't': [i * 900 for i in range(70)], 'o': c, 'h': c, 'l': c, 'c': c, 'v': [1] * 70}
+        st = tech.intraday_stats(bars, 65 * 900)
+        self.assertEqual((st['n'], st['lt'], st['lc']), (65, 64 * 900, c[64]))
+        self.assertEqual(st['p10'], sum(c[55:65]) / 10)
+        self.assertEqual(tech.intraday_stats(bars)['n'], 70)
+        self.assertIsNone(tech.intraday_stats(bars, 50 * 900))
+        self.assertIsNone(tech.intraday_stats({'s': 'no_data'}))
+
+    def test_tham_so_mo_ta_va_noi_vao_bo_loc(self):
+        self.assertEqual(sig('RSIBottom')['params'], {'tf': '15m', 'level': 30, 'look': 16})
+        self.assertEqual(sig('RSIBottom', tf='4h', look=17)['params'], {'tf': '15m', 'level': 30, 'look': 16})
+        self.assertEqual(conditions.describe_signal(sig('RSIBottom', tf='D')),
+                         'RSI tạo đáy khung ngày: thoát quá bán 30 (đáy trong 16 nến), RSI trên Signal, giá trên MA10')
+        self.assertEqual(conditions.param_text('15m'), '15 phút')
+        m15, day = {'signals': [sig('RSIBottom')]}, {'signals': [sig('RSIBottom', tf='D')]}
+        self.assertEqual((core.needs_intraday(m15), core.needs_tech(m15)), (True, False))   # khỏi tải nến ngày cả năm
+        self.assertEqual((core.needs_intraday(day), core.needs_tech(day)), (False, True))
+        self.assertFalse(core.needs_intraday({'signals': [sig('MACDAboveZeroLine')]}))
+        q = {'Symbol': 'AAA', 'Exchange': 'HOSTC', 'PriceCurrent': 11000, 'TotalVolume': 0}
+        st = {'rs': self.RS, 'lc': 11, 'p10': 10}
+        row = core.transform_quote(q, intra={'15m': st})
+        self.assertEqual(row['_live']['intra'], {'15m': st})
+        self.assertEqual(core.apply_signals([row], m15['signals']), [row])
+        self.assertNotIn('intra', core.transform_quote(q)['_live'])
 
 
 class CotSoKieuFireAnt(unittest.TestCase):

@@ -4,6 +4,7 @@ Chỉ báo kỹ thuật tính từ nến ngày — dữ liệu nền cho các đ
 
 Mọi con số tính trên các phiên ĐÃ ĐÓNG (bỏ nến hôm nay) — đúng cách bảng thống kê của FireAnt đưa ra;
 điều kiện lọc (conditions.py) rồi ghép giá hiện tại vào để biết "hôm nay có cắt lên / cắt xuống không".
+Riêng khung 15 phút (intraday_stats): xét nến đã chốt gần nhất, không ghép giá hiện tại.
 Giá tính bằng nghìn đồng như cột Giá của bảng; khối lượng bằng cổ phiếu.
 Không dính giao diện, không dính mạng (lấy nến nằm ở core.py) nên test được.
 """
@@ -11,12 +12,39 @@ import calendar
 import math
 
 # Cửa sổ trung bình mà các điều kiện cần (số phiên): giá đóng cửa, khối lượng.
-PRICE_AVG_N = (4, 5, 9, 10, 14, 15, 19, 20, 44, 45)
+PRICE_AVG_N = (4, 5, 9, 10, 14, 15, 19, 20, 44, 45, 49, 50, 99, 100, 199, 200)
 VOL_AVG_N = (4, 5, 9, 10, 14, 19, 20, 44)
-EMA_N = (5, 10, 15, 20, 45)
+EMA_N = (5, 10, 15, 20, 45, 50, 100, 200)
+VERSION = 7        # đổi khi thêm số thống kê mới → bộ nhớ đệm tech.json cũ của hôm nay bị bỏ, tải lại
 # Các mốc "1 tuần … 1 năm": tính theo lịch (ngày hoặc tháng) lùi từ hôm nay.
 PERIODS = {'1w': ('d', 7), '2w': ('d', 14), '1m': ('m', 1), '3m': ('m', 3), '6m': ('m', 6), '1y': ('m', 12)}
 MIN_BARS = 20      # ít hơn chừng này phiên (mã mới niêm yết) thì chưa tính — thà thiếu còn hơn sai
+
+# Pullback về SMA: kỳ → (số phiên tìm đỉnh nhịp tăng, đỉnh phải cách SMA tối thiểu); SMA dốc lên = hôm qua > 10 phiên trước.
+PB_SMA = {10: (15, .04), 20: (20, .05), 50: (30, .08)}
+PB_SLOPE = 10
+# Trendline tự vẽ trên GIÁ ĐÓNG CỬA (như biểu đồ đường): đáy / đỉnh = giá đóng cửa thấp / cao nhất trong 3 phiên mỗi bên;
+# nối 2 điểm cách nhau ≥ 10 phiên, dốc ≤ 1%/phiên; các điểm khác cách đường ≤ 2% vẫn tính là "chạm" và giá đóng cửa
+# được xuyên qua đường tối đa 2% (lệch 1–2% như mắt người kẻ); đường phải đi qua ít nhất 3 điểm (2 điểm nối + 1 lần chạm).
+# • Trendline tăng (nối đáy): tới hôm qua chưa thủng; sau đáy 2 giá đã lên cách đường ≥ 5% và có đỉnh cao hơn
+#   đỉnh giữa 2 đáy (đáy cao dần mà đỉnh thấp dần là tích luỹ, không phải xu hướng tăng).
+# • Trendline giảm (nối đỉnh): giữa các lần chạm giá đã xuống cách đường ≥ 5%; được phép đã vượt lên đường trong
+#   TL_RECENT phiên gần nhất (để bắt nhịp vượt rồi quay lại kiểm định) — vượt từ trước đó thì đường đã cũ, bỏ.
+TL_WINDOWS = {'3m': 60, '6m': 120}
+TL_PIVOT, TL_MIN_GAP, TL_MAX_SLOPE = 3, 10, .01
+TL_TOL, TL_EXT, TL_RECENT, TL_TOUCHES = .02, .05, 10, 3
+TL_MIN_BARS = 40
+# Quét lùi tìm phiên vượt trendline giảm gần nhất: tối đa chừng này phiên; vượt = đóng cửa trên đường ≥ 1%
+# (các phiên trước đó chưa vượt) và KL phiên đó ≥ KLTB 20 phiên liền trước.
+BREAK_DAYS, BREAK_UP = 20, .01
+# RSI tạo đáy (luật Long của anh bên hệ phái sinh): Signal = WMA(14) của RSI(14); giữ RSI của RSI_KEEP nến đã đóng
+# gần nhất — đủ cho WMA14 và tìm đáy trong tối đa RSI_KEEP nến.
+RSI_SIGNAL_N, RSI_KEEP = 14, 30
+# Nến 15 phút (dchart ghi giờ MỞ nến): các buổi khớp lệnh theo phút trong ngày, giờ VN. Nến ATC của HOSE mang giờ 14:45
+# → buổi chiều tính tới 15:00 (khung 14:45 coi như chưa chốt) cho chắc nến ATC đã lên dchart.
+INTRA_MIN = 15
+INTRA_SESSIONS = ((9 * 60, 11 * 60 + 30), (13 * 60, 15 * 60))
+INTRA_MIN_BARS = 60     # ~4 phiên mã thanh khoản tốt; mã ít khớp lệnh thì nến thưa, RSI 15 phút vô nghĩa → không tính
 
 
 def minus_period(date, kind, n):
@@ -85,6 +113,25 @@ def wilder_rsi_parts(closes, n=14):
     return ag, al
 
 
+def rsi_of(gain, loss):
+    return 100.0 if loss == 0 else 100 - 100 / (1 + gain / loss)
+
+
+def rsi_tail(closes, keep=RSI_KEEP, n=14):
+    """RSI Wilder(n) tại `keep` nến cuối (cũ → mới), cùng cách tính wilder_rsi_parts; [] nếu chưa đủ n+1 nến."""
+    if len(closes) < n + 1:
+        return []
+    diffs = [b - a for a, b in zip(closes, closes[1:])]
+    ag = sum(max(d, 0) for d in diffs[:n]) / n
+    al = sum(max(-d, 0) for d in diffs[:n]) / n
+    out = [rsi_of(ag, al)]
+    for d in diffs[n:]:
+        ag = (ag * (n - 1) + max(d, 0)) / n
+        al = (al * (n - 1) + max(-d, 0)) / n
+        out.append(rsi_of(ag, al))
+    return out[-keep:]
+
+
 def money_flow(bars, n=14):
     """MFI: (dòng tiền dương n−1 phiên cuối, dòng tiền âm n−1 phiên cuối, MFI n phiên tại phiên cuối, điển hình phiên cuối).
     Dòng tiền = giá điển hình × KL; dương nếu giá điển hình tăng so với phiên trước, âm nếu giảm."""
@@ -114,8 +161,137 @@ def streak(closes):
     return s
 
 
-def stats_from_bars(bars, today, date_of):
-    """Toàn bộ số thống kê của 1 mã, tính trên các phiên đã đóng; None nếu quá ít nến."""
+def sma_series(closes, n):
+    """SMA(n) tại từng phiên (None khi chưa đủ n phiên)."""
+    out = [None] * len(closes)
+    s = 0.0
+    for i, c in enumerate(closes):
+        s += c
+        if i >= n:
+            s -= closes[i - n]
+        if i >= n - 1:
+            out[i] = s / n
+    return out
+
+
+def pullback_leg(rows, line, lookback):
+    """Nhịp tăng rồi điều chỉnh gần nhất so với 1 đường hỗ trợ (line[i] = giá trị đường ở phiên i).
+    Đỉnh nhịp = phiên có giá cao nhất trong `lookback` phiên đã đóng gần nhất (bằng nhau thì lấy phiên sau).
+    ext: đỉnh / đường tại đỉnh − 1; pk: số phiên sau đỉnh; vpb: KLTB các phiên sau đỉnh; mr: thấp nhất của
+    đóng cửa / đường từ sau đỉnh (vpb, mr = None nếu đỉnh là phiên cuối); lr: thấp nhất của giá thấp / đường 2 phiên cuối."""
+    n = len(rows)
+    start = max(n - lookback, 0)
+    if n < 2 or any(line[i] is None or line[i] <= 0 for i in range(min(start, n - 2), n)):
+        return None
+    peak = max(range(start, n), key=lambda i: (rows[i][2], i))
+    after = range(peak + 1, n)
+    return {'ext': rows[peak][2] / line[peak] - 1, 'pk': len(after),
+            'vpb': _mean([rows[i][5] for i in after]) if after else None,
+            'mr': min(rows[i][4] / line[i] for i in after) if after else None,
+            'lr': min(rows[i][3] / line[i] for i in (n - 2, n - 1))}
+
+
+def pivots(values, high=False, k=TL_PIVOT):
+    """Chỉ số các đáy (giá thấp nhỏ nhất trong k phiên mỗi bên) hoặc đỉnh (high=True: giá cao lớn nhất).
+    Điểm sát cuối chuỗi chưa đủ k phiên sau thì chưa tính."""
+    pick = max if high else min
+    return [i for i in range(k, len(values) - k) if values[i] == pick(values[i - k:i + k + 1])]
+
+
+def trend_line(rows, window, up=True):
+    """Trendline tự vẽ trên giá đóng cửa trong `window` phiên đã đóng gần nhất (luật ở đầu file: TL_*).
+    up=True: trendline tăng nối đáy; up=False: trendline giảm nối đỉnh (mọi phép so lật chiều bằng sg).
+    Chọn như mắt người kẻ: từ đáy / đỉnh lớn sớm nhất còn giữ được đường → tới điểm gần nhất mà giữa chừng không giá
+    đóng cửa nào xuyên quá TL_TOL (ôm sát giá nhất).
+    Trả {'v': giá trị đường phiên cuối, 's': dốc mỗi phiên, 'a'/'b': ngày 2 điểm nối, 'e': ngày lần chạm cuối,
+    't': số lần chạm} hoặc None. Trendline tăng thêm các số của nhịp pullback_leg; trendline giảm thêm 'cr' / 'lr' =
+    giá đóng cửa / giá thấp chia giá trị đường của các phiên sau lần chạm cuối (tối đa TL_RECENT phiên gần nhất)."""
+    rows = rows[-window:]
+    if len(rows) < TL_MIN_BARS:
+        return None
+    closes = [r[4] for r in rows]
+    highs = [r[2] for r in rows]
+    sg = 1 if up else -1
+    last = len(rows) - 1
+    # Giá đóng cửa phải nằm đúng phía của đường (cho lệch TL_TOL) tới hết `until`; trendline giảm được vượt gần đây
+    until = last if up else last - TL_RECENT
+    # Đỉnh mới sau khi đã vượt (trong TL_RECENT phiên cuối) không được làm điểm nối — kẻo đường "nuốt" luôn nhịp vượt
+    piv = [p for p in pivots(closes, high=not up) if p <= until]
+    # Giá đóng cửa đã chia sẵn cho (1 ∓ TL_TOL): phiên i không xuyên đường quá TL_TOL ⇔ sg·đường(i) ≤ sg·edge[i]
+    edge = [c / (1 - sg * TL_TOL) for c in closes]
+    after = {}          # b → giới hạn dốc để từ sau b tới `until` không phiên nào xuyên đường (tính khi cần, nhớ lại)
+
+    def after_lim(b):
+        if b not in after:
+            after[b] = min((sg * (edge[i] - closes[b]) / (i - b) for i in range(b + 1, until + 1)), default=math.inf)
+        return after[b]
+
+    # Duyệt đúng thứ tự ưu tiên (a sớm nhất, rồi b muộn nhất): đường hợp lệ đầu tiên gặp là đường cần tìm
+    for ai, a in enumerate(piv):
+        y0 = closes[a]
+        before = None   # before[b] = giới hạn dốc để giữa a và b không phiên nào xuyên đường — dựng 1 lượt khi cần
+        for b in reversed(piv[ai + 1:]):
+            if b - a < TL_MIN_GAP or sg * (closes[b] - y0) <= 0:
+                continue
+            s = (closes[b] - y0) / (b - a)
+            if abs(s) > TL_MAX_SLOPE * y0 or sg * s > after_lim(b):
+                continue
+            if before is None:
+                before = [math.inf] * (b + 1)
+                for i in range(a + 1, b):
+                    before[i + 1] = min(before[i], sg * (edge[i] - y0) / (i - a))
+            if sg * s > before[b]:
+                continue
+            # Tăng: đỉnh sau đáy 2 phải cao hơn đỉnh giữa 2 đáy
+            if up and max(highs[b + 1:]) < max(highs[a:b + 1]):
+                continue
+            line = [y0 + s * (i - a) for i in range(len(rows))]
+            touch = [p for p in piv if a <= p <= until and abs(closes[p] / line[p] - 1) <= TL_TOL]
+            if len(touch) < TL_TOUCHES:
+                continue
+            e = touch[-1]
+            if up:
+                extra = pullback_leg(rows, line, last - b)
+                if extra is None or extra['ext'] < TL_EXT:
+                    continue
+            else:
+                if min(closes[i] / line[i] for i in range(a, e + 1)) > 1 - TL_EXT:
+                    continue
+                recent = range(max(e + 1, last - TL_RECENT + 1), last + 1)
+                extra = {'cr': [closes[i] / line[i] for i in recent], 'lr': [rows[i][3] / line[i] for i in recent]}
+            return {'v': line[last], 's': s, 'a': rows[a][0], 'b': rows[b][0], 'e': rows[e][0], 't': len(touch), **extra}
+    return None
+
+
+def last_break(rows, window, back=BREAK_DAYS):
+    """Phiên vượt trendline giảm gần nhất trong `back` phiên đã đóng: kẻ lại đường đúng như hôm đó app kẻ (chỉ dùng
+    nến tới hết phiên liền trước) rồi xem phiên đó có vượt không. Trả {'k': số phiên trước (1 = phiên đóng gần nhất),
+    'd': ngày, 'p': giá đóng cửa phiên vượt, 'r': đóng cửa / đường, 'vr': KL / KLTB 20} hoặc None."""
+    for k in range(1, min(back, len(rows) - 1) + 1):
+        past, bar = rows[:-k], rows[-k]
+        td = trend_line(past, window, up=False)
+        if not td or any(r >= 1 + BREAK_UP for r in td['cr']):
+            continue
+        v20 = _mean([r[5] for r in past[-20:]])
+        r = bar[4] / (td['v'] + td['s'])
+        if r >= 1 + BREAK_UP and bar[5] >= v20:
+            return {'k': k, 'd': bar[0], 'p': bar[4], 'r': r, 'vr': bar[5] / v20 if v20 else None}
+    return None
+
+
+def _round(v):
+    if isinstance(v, float):
+        return round(v, 6)
+    if isinstance(v, dict):
+        return {k: _round(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_round(x) for x in v]
+    return v
+
+
+def stats_from_bars(bars, today, date_of, history=False):
+    """Toàn bộ số thống kê của 1 mã, tính trên các phiên đã đóng; None nếu quá ít nến.
+    history=True: thêm quét lùi phiên vượt trendline giảm (nặng hơn — chỉ bật khi có tiêu chí dùng)."""
     rows = closed_bars(bars, today, date_of)
     if len(rows) < MIN_BARS:
         return None
@@ -126,7 +302,7 @@ def stats_from_bars(bars, today, date_of):
     out = {'n': n, 'ld': dates[-1], 'lc': closes[-1], 'lh': rows[-1][2], 'll': rows[-1][3]}
 
     for k in PRICE_AVG_N:
-        out[f'p{k}'] = _mean(closes[-k:])
+        out[f'p{k}'] = _mean(closes[-k:]) if n >= k else None    # chưa đủ phiên (vd SMA200 mã mới) → không tính
     for k in VOL_AVG_N:
         out[f'v{k}'] = _mean(vols[-k:])
     since3m = minus_period(today, 'm', 3)
@@ -151,6 +327,7 @@ def stats_from_bars(bars, today, date_of):
     else:
         out['e12'] = out['e26'] = out['sig'] = None
     out['ag'], out['al'] = wilder_rsi_parts(closes)
+    out['rs'] = [round(x, 4) for x in rsi_tail(closes)]
     out['pmf'], out['nmf'], out['mfi'], _ = money_flow(rows)
 
     # Đỉnh / đáy và giá mốc "1 tuần … 1 năm trước"
@@ -162,7 +339,56 @@ def stats_from_bars(bars, today, date_of):
         ref = [c for d, c in zip(dates, closes) if d <= since]
         out[f'px{key}'] = ref[-1] if ref else None
     out['streak'] = streak(closes)
-    return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in out.items()}
+
+    # Pullback: SMA 10 phiên trước (độ dốc), nhịp tăng rồi điều chỉnh so với SMA; trendline tăng
+    for k, (look, _) in PB_SMA.items():
+        line = sma_series(closes, k)
+        out[f'ps{k}'] = line[-1 - PB_SLOPE] if n >= k + PB_SLOPE else None
+        out[f'pb{k}'] = pullback_leg(rows, line, look) if n >= k + look else None
+    for key, w in TL_WINDOWS.items():
+        out[f'tl{key}'] = trend_line(rows, w)
+        out[f'td{key}'] = trend_line(rows, w, up=False)
+        if history:
+            out[f'tb{key}'] = last_break(rows, w)
+    return _round(out)
+
+
+# ── Nến 15 phút ─────────────────────────────────────────────────────────
+
+def intraday_cutoff(now):
+    """Giờ mở nến 15 phút đang chạy lúc `now` (datetime giờ VN): nến từ giờ này trở đi chưa chốt.
+    None = ngoài giờ khớp lệnh (nghỉ trưa, sau giờ, trước giờ mở cửa, cuối tuần) — mọi nến đã chốt."""
+    if now.weekday() >= 5:
+        return None
+    m = now.hour * 60 + now.minute
+    for a, b in INTRA_SESSIONS:
+        if a <= m < b:
+            m -= m % INTRA_MIN
+            return now.replace(hour=m // 60, minute=m % 60, second=0, microsecond=0)
+    return None
+
+
+def intraday_key(now):
+    """Mốc của bộ nến 15 phút dùng được lúc `now`: giờ mở nến đang chạy; ngoài giờ là giờ hết buổi vừa xong
+    (11:30 / 15:00; trước giờ mở cửa, cuối tuần: 00:00). Sang mốc mới = vừa có nến chốt → tải lại."""
+    cut = intraday_cutoff(now)
+    if cut is None:
+        m = now.hour * 60 + now.minute
+        ends = [b for _, b in INTRA_SESSIONS if b <= m] if now.weekday() < 5 else []
+        m = ends[-1] if ends else 0
+        cut = now.replace(hour=m // 60, minute=m % 60, second=0, microsecond=0)
+    return cut.strftime('%Y-%m-%d %H:%M')
+
+
+def intraday_stats(bars, cutoff=None):
+    """Số thống kê khung 15 phút của 1 mã tại nến đã chốt gần nhất — nến có giờ mở < cutoff (giây Unix; None = mọi nến).
+    None nếu quá ít nến."""
+    rows = closed_bars(bars, math.inf if cutoff is None else cutoff, lambda t: t)     # 'ngày' ở đây là giây Unix
+    if len(rows) < INTRA_MIN_BARS:
+        return None
+    closes = [r[4] for r in rows]
+    return _round({'n': len(rows), 'lt': rows[-1][0], 'lc': closes[-1], 'p10': _mean(closes[-10:]),
+                   'rs': [round(x, 4) for x in rsi_tail(closes)]})
 
 
 # ── Khối lượng dự kiến cả phiên ─────────────────────────────────────────

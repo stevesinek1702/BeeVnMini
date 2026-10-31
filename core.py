@@ -33,6 +33,7 @@ COOKIE_SHEET_URL = ('https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out
 STAT_UA = ('Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 '
            '(KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36')
 HISTORY_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=D'
+INTRA_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=15'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
 
 # FireAnt cắt bớt kết quả khi hỏi quá nhiều mã một lần (400 mã chỉ về ~60%) → 100 mã/lượt.
@@ -239,25 +240,58 @@ def fetch_all_history(symbols, today, done=None, on_progress=None):
 
 
 # Chỉ báo kỹ thuật (RSI, MFI, MACD, Bollinger, cắt SMA/EMA, đỉnh đáy 1 năm…) cần ~1 năm nến chứ không phải 70 phiên.
-TECH_DAYS = 420
+TECH_DAYS = 600      # ~410 phiên: đủ cho SMA/EMA 200 và EMA kịp 'quên' giá mồi đầu chuỗi
 TECH_WORKERS = 8
 
 
-def fetch_tech(symbol, today):
+def fetch_tech(symbol, today, history=False):
     to = int(time.time())
     frm = to - TECH_DAYS * 86400
     return tech.stats_from_bars(_get_json(f'{HISTORY_URL}&symbol={symbol}&from={frm}&to={to}', accept='*/*'),
-                                today, vn_date)
+                                today, vn_date, history)
 
 
-def fetch_all_tech(symbols, today, done=None, on_progress=None):
-    """Thống kê kỹ thuật cho các mã còn thiếu. Mã không đủ dữ liệu → {} để khỏi thử lại mãi; lỗi mạng → bỏ trống."""
+def fetch_all_tech(symbols, today, done=None, on_progress=None, history=False):
+    """Thống kê kỹ thuật cho các mã còn thiếu. Mã không đủ dữ liệu → {} để khỏi thử lại mãi; lỗi mạng → bỏ trống.
+    history=True: kèm quét lùi phiên vượt trendline giảm."""
     done = dict(done or {})
     todo = [s for s in symbols if s not in done]
 
     def one(sym):
         try:
-            return sym, (fetch_tech(sym, today) or {})
+            return sym, (fetch_tech(sym, today, history) or {})
+        except Exception:
+            return sym, None
+
+    with ThreadPoolExecutor(TECH_WORKERS) as ex:
+        for i, (sym, stats) in enumerate(ex.map(one, todo), 1):
+            if stats is not None:
+                done[sym] = stats
+            if on_progress and i % 50 == 0:
+                on_progress(len(done) / len(symbols))
+    return done
+
+
+# Nến 15 phút: 21 ngày ≈ 15 phiên ≈ 240 nến với mã thanh khoản tốt — đủ để RSI Wilder 'quên' giá mồi đầu chuỗi.
+# Cả thị trường ~30 s; tải lại sau mỗi lần chốt nến khi có tiêu chí dùng khung 15 phút.
+INTRA_DAYS = 21
+
+
+def fetch_intraday(symbol, now):
+    to = int(now.timestamp())
+    cut = tech.intraday_cutoff(now)
+    return tech.intraday_stats(_get_json(f'{INTRA_URL}&symbol={symbol}&from={to - INTRA_DAYS * 86400}&to={to}',
+                                         accept='*/*'), cut and cut.timestamp())
+
+
+def fetch_all_intraday(symbols, now, done=None, on_progress=None):
+    """Thống kê nến 15 phút (đã chốt tới lúc `now`) cho các mã còn thiếu. Mã ít nến → {}; lỗi mạng → bỏ trống."""
+    done = dict(done or {})
+    todo = [s for s in symbols if s not in done]
+
+    def one(sym):
+        try:
+            return sym, (fetch_intraday(sym, now) or {})
         except Exception:
             return sym, None
 
@@ -291,8 +325,9 @@ def quote_vn_date(q):
     return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(VN_TZ).strftime('%Y-%m-%d')
 
 
-def transform_quote(q, hist=None, tech_stats=None, now=None):
-    """Quote FireAnt → hàng bảng giá. hist = MA / KL trung bình; tech_stats = thống kê kỹ thuật (tech.py) của mã.
+def transform_quote(q, hist=None, tech_stats=None, now=None, intra=None):
+    """Quote FireAnt → hàng bảng giá. hist = MA / KL trung bình; tech_stats = thống kê kỹ thuật (tech.py) của mã;
+    intra = {'15m': thống kê nến 15 phút} (chỉ khi có tiêu chí dùng khung 15 phút).
     Hàng mang thêm '_tech' / '_live' để các điều kiện tín hiệu (conditions.py) tính; hai khoá này không hiện ra bảng."""
     h = hist or {}
     vol = q.get('TotalVolume') or 0
@@ -323,15 +358,17 @@ def transform_quote(q, hist=None, tech_stats=None, now=None):
     # Giá đang ở trần / sàn → mã và các ô giá đổi sang màu trần (tím) / sàn (xanh lơ) như bảng giá
     cur, top, bottom = q.get('PriceCurrent'), q.get('PriceCeiling'), q.get('PriceFloor')
     row['limit'] = 'ceil' if cur and top and cur >= top else ('floor' if cur and bottom and cur <= bottom else None)
-    row.update(conditions.quote_metrics(q))
-    row.update(conditions.tech_metrics(tech_stats or None, price, change))
     now = now or vn_now()
     # Quote của phiên cũ (cuối tuần, ngoài giờ) đã đủ cả phiên → không ngoại suy theo giờ hiện tại
     est = (tech.estimated_volume(vol, exchange, now) if quote_vn_date(q) in (None, now.strftime('%Y-%m-%d'))
            else (vol or None))
+    row.update(conditions.quote_metrics(q))
+    row.update(conditions.tech_metrics(tech_stats or None, price, change, est))
     row['_tech'] = tech_stats or None
     row['_live'] = {'last': price, 'high': k(q.get('PriceHigh')), 'low': k(q.get('PriceLow')),
                     'volume': vol, 'est': est}
+    if intra:
+        row['_live']['intra'] = intra
     return row
 
 
@@ -460,12 +497,28 @@ def has_conditions(c):
 
 def needs_tech(c):
     """Tiêu chí có dùng điều kiện cần lịch sử ~1 năm (thống kê kỹ thuật) không — không thì khỏi tải."""
-    return bool(c.get('signals')) or any(k in conditions.TECH_METRIC_KEYS for k in active_filter_keys(c.get('filters')))
+    return (any(conditions.signal_tf(s) == 'D' for s in c.get('signals') or [])
+            or any(k in conditions.TECH_METRIC_KEYS for k in active_filter_keys(c.get('filters'))))
+
+
+def needs_intraday(c):
+    """Tiêu chí có tín hiệu khung 15 phút không — có thì tải nến 15 phút sau mỗi lần chốt nến."""
+    return any(conditions.signal_tf(s) == '15m' for s in c.get('signals') or [])
+
+
+def needs_break_history(c):
+    """Tiêu chí có lọc theo phiên vượt trendline giảm không — có thì phải quét lùi (tech.last_break) khi tải chỉ báo."""
+    return any(k in conditions.BREAK_ALL_KEYS for k in active_filter_keys(c.get('filters')))
 
 
 def extra_columns(filters):
-    """Cột kiểu FireAnt đang bị lọc, theo thứ tự danh mục."""
+    """Cột kiểu FireAnt đang bị lọc, theo thứ tự danh mục. Lọc 1 cột của nhóm vượt trendline thì hiện cả nhóm
+    (phiên vượt · giá vượt · % so với giá vượt)."""
     active = set(active_filter_keys(filters))
+    for k in list(active):
+        if k in conditions.BREAK_ALL_KEYS:
+            grp = conditions.BREAK_ALL_KEYS[k]
+            active.update((grp, *conditions.BREAK_COMPANIONS[grp]))
     return [(k, conditions.METRIC_LABEL[k]) for k in conditions.METRIC_KEYS if k in active]
 
 
@@ -682,6 +735,11 @@ def format_cell(s, key):
         txt = js_num(d) + '%'
         return txt, ('up' if d > 50 else ('down' if d < 50 else 'flat'))
     fmt = conditions.METRIC_FMT.get(key)
+    if fmt == 'ago':
+        v = s.get(key)
+        if v is None:
+            return '--', 'muted'
+        return ('hôm nay', 'up') if v == 0 else (s.get(key + 'Day') or f'{v} phiên', '')
     if fmt:
         return format_metric(s.get(key), fmt)
     return str(s.get(key, '')), ''
@@ -694,6 +752,8 @@ def format_metric(v, fmt):
     tone = 'up' if v > 0 else ('down' if v < 0 else 'flat')
     if fmt == 'pct':
         return ('+' if v > 0 else '') + _fixed(v, 2) + '%', tone
+    if fmt == 'price':
+        return js_num(v), ''          # đủ 2 số lẻ như cột MA (format_price làm tròn 1 số: 22.75 → 22.8)
     if fmt == 'pct0':
         return _fixed(v, 0) + '%', ('up' if v > 50 else ('down' if v < 50 else 'flat'))
     if fmt == 'int':

@@ -9,6 +9,7 @@ Hai loại điều kiện:
 Công thức chép từ bộ lọc của FireAnt (quote.worker, 10/2026): số thống kê tính ở phiên đã đóng gần nhất
 (tech.py) rồi ghép giá hiện tại vào để thấy "hôm nay đã cắt lên / cắt xuống chưa". Giá tính bằng nghìn đồng:
 khoảng đệm 0.05 ở EMA / Bollinger là 50đ (một bước giá), y như FireAnt.
+Tín hiệu có tham số 'tf' (khung) = '15m' thì tính trên nến 15 phút đã chốt (lv['intra']['15m']) thay cho nến ngày.
 """
 import math
 import re
@@ -18,7 +19,8 @@ import tech
 
 # ── Nhóm hiển thị (cho bộ chọn điều kiện) ───────────────────────────────
 GROUPS = [('price', 'Giá'), ('volume', 'Khối lượng'), ('ma', 'Đường trung bình'),
-          ('rsi', 'RSI (14)'), ('mfi', 'MFI (14)'), ('bb', 'Bollinger Band (20)'), ('macd', 'MACD')]
+          ('rsi', 'RSI (14)'), ('mfi', 'MFI (14)'), ('bb', 'Bollinger Band (20)'), ('macd', 'MACD'),
+          ('pullback', 'Pullback & trendline')]
 
 # ── Điều kiện dạng con số ───────────────────────────────────────────────
 # (khoá, nhãn đầy đủ, nhãn ngắn trên tiêu đề cột, nhóm, kiểu hiển thị)
@@ -39,6 +41,14 @@ METRICS = [
     ('avgVol3m', 'KLTB 3 tháng', 'KLTB 3T', 'volume', 'vol'),
     ('foreignNetVol', 'KL nước ngoài mua ròng', 'KL NN ròng', 'volume', 'svol'),
     ('foreignNetValue', 'GT nước ngoài mua ròng (tỷ)', 'GT NN ròng', 'volume', 'sbil'),
+    ('distSMA20', 'Khoảng cách giá tới SMA20 (%)', '↕SMA20', 'pullback', 'pct'),
+    ('distSMA50', 'Khoảng cách giá tới SMA50 (%)', '↕SMA50', 'pullback', 'pct'),
+    ('brkTL3m', 'Vượt trendline giảm 3 tháng cách đây (phiên)', 'Vượt TL 3T', 'pullback', 'ago'),
+    ('brkTL3mPx', 'Giá vượt trendline giảm 3 tháng (giá đóng cửa phiên vượt)', 'Giá vượt 3T', 'pullback', 'price'),
+    ('brkTL3mPct', '% giá hiện tại so với giá vượt trendline giảm 3 tháng', '% từ vượt 3T', 'pullback', 'pct'),
+    ('brkTL6m', 'Vượt trendline giảm 6 tháng cách đây (phiên)', 'Vượt TL 6T', 'pullback', 'ago'),
+    ('brkTL6mPx', 'Giá vượt trendline giảm 6 tháng (giá đóng cửa phiên vượt)', 'Giá vượt 6T', 'pullback', 'price'),
+    ('brkTL6mPct', '% giá hiện tại so với giá vượt trendline giảm 6 tháng', '% từ vượt 6T', 'pullback', 'pct'),
 ]
 METRIC_KEYS = [m[0] for m in METRICS]
 METRIC_LABEL = {m[0]: m[1] for m in METRICS}
@@ -49,8 +59,15 @@ METRIC_FMT = {m[0]: m[4] for m in METRICS}
 
 _TECH_PERIOD = {'change1w': '1w', 'change1m': '1m', 'change3m': '3m', 'change6m': '6m', 'change1y': '1y'}
 _TECH_AVGVOL = {'avgVol5': 'v5', 'avgVol10': 'v10', 'avgVol20': 'v20', 'avgVol3m': 'v3m'}
+_TECH_DIST = {'distSMA20': 20, 'distSMA50': 50}
+# Phiên vượt trendline giảm gần nhất (0 = hôm nay): cần quét lùi tech.last_break — nặng, chỉ tính khi có tiêu chí dùng.
+# Mỗi cột kèm 2 cột đi cùng (giá vượt, % hiện tại so với giá vượt): lọc cột nào trong nhóm thì cả 3 cùng hiện.
+BREAK_METRIC_KEYS = {'brkTL3m': '3m', 'brkTL6m': '6m'}
+BREAK_COMPANIONS = {k: (k + 'Px', k + 'Pct') for k in BREAK_METRIC_KEYS}
+BREAK_ALL_KEYS = {k: grp for grp, ks in BREAK_COMPANIONS.items() for k in (grp, *ks)}      # cột → cột chính của nhóm
 # Cột phải có lịch sử nến mới tính được (các cột còn lại lấy thẳng từ quote)
-TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, 'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp')
+TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, *_TECH_DIST, *BREAK_ALL_KEYS,
+                    'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp')
 
 
 def quote_metrics(q):
@@ -65,11 +82,14 @@ def quote_metrics(q):
     }
 
 
-def tech_metrics(st, last, change):
-    """Các con số cần lịch sử: thay đổi giá nhiều kỳ, số phiên tăng / giảm liên tục, KLTB.
-    st = thống kê tech.stats_from_bars (None nếu chưa có); last = giá hiện tại; change = giá − giá tham chiếu."""
+def tech_metrics(st, last, change, est=None):
+    """Các con số cần lịch sử: thay đổi giá nhiều kỳ, số phiên tăng / giảm liên tục, KLTB, phiên vượt trendline giảm.
+    st = thống kê tech.stats_from_bars (None nếu chưa có); last = giá hiện tại; change = giá − giá tham chiếu;
+    est = KL dự kiến cả phiên hôm nay. Phiên vượt trendline kèm khoá '<cột>Day' = ngày 'dd/mm' để hiện ra ô."""
     out = dict.fromkeys(_TECH_PERIOD, None)
     out.update(dict.fromkeys(_TECH_AVGVOL, None))
+    out.update(dict.fromkeys(_TECH_DIST, None))
+    out.update(dict.fromkeys(BREAK_ALL_KEYS, None))
     out.update(upDays=None, downDays=None, upDaysBeforeDown=None, downDaysBeforeUp=None)
     if not st:
         return out
@@ -78,6 +98,20 @@ def tech_metrics(st, last, change):
             px = st.get(f'px{per}')
             if px and px > 0:
                 out[key] = (last - px) * 100 / px
+        for key, n in _TECH_DIST.items():
+            ma = sma_live(st, last, n)
+            if ma:
+                out[key] = (last - ma) * 100 / ma
+        for key, per in BREAK_METRIC_KEYS.items():
+            # Hôm nay đang vượt (cùng luật tín hiệu "Vượt lên trendline giảm" mặc định) thì là 0, không thì lấy lần quét lùi
+            px_key, pct_key = BREAK_COMPANIONS[key]
+            if _break_down_line(st, {'last': last, 'est': est}, {'period': per, 'brk': tech.BREAK_UP * 100, 'vol': 'có'}):
+                out[key], out[key + 'Day'], out[px_key] = 0, None, last          # vượt ngay hôm nay: giá vượt = giá hiện tại
+            elif st.get('tb' + per):
+                tb = st['tb' + per]
+                out[key], out[key + 'Day'], out[px_key] = tb['k'], f"{tb['d'][8:10]}/{tb['d'][5:7]}", tb['p']
+            if out[px_key]:
+                out[pct_key] = (last - out[px_key]) * 100 / out[px_key]
     for key, sk in _TECH_AVGVOL.items():
         out[key] = st.get(sk)
     s = st.get('streak')
@@ -105,14 +139,23 @@ def _p(pid, name, choices, default, free=False, lo=None, hi=None):
 
 
 PERIOD_NAME = {'1w': '1 tuần', '2w': '2 tuần', '1m': '1 tháng', '3m': '3 tháng', '6m': '6 tháng', '1y': '1 năm'}
-MA_PERIODS = (5, 10, 15, 20, 45)
+MA_PERIODS = (5, 10, 15, 20, 45, 50, 100, 200)
 P_HIGHLOW = _p('period', 'trong', tuple(PERIOD_NAME), '1y')
 P_MA = _p('period', 'kỳ (phiên)', MA_PERIODS, 5)
 P_RSI_UP = _p('level', 'ngưỡng quá mua', (60, 65, 70, 75, 80, 85, 90), 70, True, 0, 100)
 P_RSI_DOWN = _p('level', 'ngưỡng quá bán', (10, 15, 20, 25, 30, 35, 40), 30, True, 0, 100)
+TF_NAME = {'15m': '15 phút', 'D': 'ngày'}
+P_TF = _p('tf', 'khung', tuple(TF_NAME), '15m')
+P_RSI_LOOK = _p('look', 'đáy trong (nến)', (8, 12, 16, 20, 24, tech.RSI_KEEP), 16)
 P_MFI_UP = _p('level', 'ngưỡng quá mua', (70, 75, 80, 85, 90), 80, True, 0, 100)
 P_MFI_DOWN = _p('level', 'ngưỡng quá bán', (10, 15, 20, 25, 30), 20, True, 0, 100)
 P_BB = _p('std', 'độ lệch chuẩn', (2, 3.5), 2, True, 0.5, 6)
+P_PB_MA = _p('period', 'SMA (phiên)', tuple(tech.PB_SMA), 20)
+P_PB_TL = _p('period', 'trendline trong', tuple(tech.TL_WINDOWS), '6m')
+P_PB_TOL = _p('tol', 'vùng ± (%)', (1, 1.5, 2, 3), 2, True, 0.5, 5)
+P_PB_DRY = _p('dry', 'KL cạn dần', ('có', 'không'), 'có')
+P_BRK = _p('brk', 'vượt đường tối thiểu (%)', (0.5, 1, 2, 3), 1, True, 0, 10)
+P_BRK_VOL = _p('vol', 'KL dự kiến ≥ KLTB 20', ('có', 'không'), 'có')
 
 
 def _valid(st, lv):
@@ -177,17 +220,13 @@ def _sma_pair(up):
 
 
 # --- RSI(14) --------------------------------------------------------------
-def _rsi_of(gain, loss):
-    return 100.0 if loss == 0 else 100 - 100 / (1 + gain / loss)
-
-
 def rsi_now(st, last):
     """(RSI ở phiên đóng gần nhất, RSI nếu giá hiện tại là giá đóng cửa)."""
     ag, al, lc = st.get('ag'), st.get('al'), st.get('lc')
     if ag is None or al is None or lc is None:
         return None, None
     d = last - lc
-    return _rsi_of(ag, al), _rsi_of(ag * 13 + max(d, 0), al * 13 + max(-d, 0))
+    return tech.rsi_of(ag, al), tech.rsi_of(ag * 13 + max(d, 0), al * 13 + max(-d, 0))
 
 
 def _rsi(kind):
@@ -200,6 +239,24 @@ def _rsi(kind):
                 'cross_down': prev >= a > live,       # thoát khỏi vùng quá mua / đi vào vùng quá bán
                 'above': live > a, 'below': live < a}[kind]
     return fn
+
+
+def _rsi_bottom(st, lv, p):
+    """RSI tạo đáy (luật Long của anh bên hệ phái sinh): trong `look` nến gần nhất RSI(14) từng ≤ ngưỡng quá bán, nay đã
+    thoát lên trên ngưỡng + RSI trên Signal (WMA14 của RSI) + giá đóng cửa trên MA10 (SMA10).
+    Khung ngày: ghép giá hiện tại làm giá đóng cửa hôm nay như các tín hiệu khác. Khung 15 phút: xét nến đã chốt gần
+    nhất — danh sách đổi mỗi lần chốt nến, không nhảy ra nhảy vào theo từng nhịp giá."""
+    rs = list(st.get('rs') or [])
+    if p['tf'] == 'D':
+        rs.append(rsi_now(st, lv['last'])[1])
+        price, ma = lv['last'], sma_live(st, lv['last'], 10)
+    else:
+        price, ma = st.get('lc'), st.get('p10')
+    n, k = tech.RSI_SIGNAL_N, p['look']
+    if None in rs or len(rs) < max(n, k) or not price or not ma:
+        return False
+    signal = sum(i * r for i, r in enumerate(rs[-n:], 1)) / (n * (n + 1) / 2)    # WMA: nến mới nhất nặng nhất
+    return min(rs[-k:]) <= p['level'] < rs[-1] and rs[-1] > signal and price > ma
 
 
 # --- MFI(14) --------------------------------------------------------------
@@ -287,6 +344,98 @@ def _macd(kind):
     return fn
 
 
+# --- Pullback: đang xu hướng tăng, điều chỉnh về kiểm định SMA / trendline tăng ------------
+def sma_live(st, last, n):
+    """SMA(n) nếu giá hiện tại là giá đóng cửa hôm nay (như _sma_cross); None nếu thiếu số."""
+    prev = st.get(f'p{n - 1}')
+    return (last + (n - 1) * prev) / n if prev else None
+
+
+def _pb_line(st, last, p, source):
+    """(giá trị đường hôm nay, nhịp tăng → điều chỉnh, ngưỡng "đã đi xa") — None nếu đường không dốc lên / thiếu số."""
+    if source == 'sma':
+        n = p['period']
+        line, ref, leg = sma_live(st, last, n), st.get(f'ps{n}'), st.get(f'pb{n}')
+        if not line or not ref or not leg or not (st.get(f'p{n}') or 0) > ref:
+            return None
+        return line, leg, tech.PB_SMA[n][1]
+    tl = st.get('tl' + p['period'])
+    return (tl['v'] + tl['s'], tl, tech.TL_EXT) if tl else None
+
+
+def _pullback(source, bounce):
+    """Chung cho SMA / trendline. Xu hướng: đường dốc lên, đỉnh nhịp vừa rồi cách đường đủ xa, từ sau đỉnh không phiên nào
+    đóng cửa thủng dưới vùng ±tol, (KL cạn) KLTB từ sau đỉnh kể cả KL dự kiến hôm nay < KLTB 20.
+    Đang kiểm định: giá thấp hôm nay chạm vùng trên đường, giá hiện tại chưa rơi khỏi vùng dưới đường.
+    Bật lên: chạm vùng trong 3 phiên gần nhất (gồm hôm nay), hôm nay giá trên đường và cao hơn giá đóng cửa hôm qua."""
+    def fn(st, lv, p):
+        last = lv['last']
+        r = _pb_line(st, last, p, source)
+        if r is None:
+            return False
+        line, leg, ext = r
+        tol = p['tol'] / 100
+        if line <= 0 or leg['ext'] < ext or (leg['mr'] is not None and leg['mr'] < 1 - tol):
+            return False
+        if p['dry'] == 'có':
+            est, v20 = lv.get('est'), st.get('v20')
+            total = (leg['vpb'] * leg['pk'] if leg['vpb'] else 0) + (est or 0)
+            count = (leg['pk'] if leg['vpb'] else 0) + (1 if est else 0)
+            if not count or not v20 or total / count >= v20:
+                return False
+        touched = min(lv.get('low') or last, last) <= line * (1 + tol)
+        if bounce:
+            return (touched or leg['lr'] <= 1 + tol) and last > line and last > st['lc']
+        return touched and last >= line * (1 - tol)
+    return fn
+
+
+def _first_above(ratios, k):
+    """Vị trí phiên đầu tiên đóng cửa ≥ k lần giá trị đường; None nếu chưa có."""
+    return next((j for j, r in enumerate(ratios) if r >= k), None)
+
+
+def _break_down_line(st, lv, p):
+    """Vượt lên trendline giảm: các phiên trước chưa phiên nào đóng cửa vượt đường ≥ brk%, hôm nay giá vượt đường
+    (kéo tới hôm nay) ≥ brk%, (vol) KL dự kiến cả phiên ≥ KLTB 20."""
+    td = st.get('td' + p['period'])
+    if not td:
+        return False
+    k = 1 + p['brk'] / 100
+    if _first_above(td['cr'], k) is not None or lv['last'] < (td['v'] + td['s']) * k:
+        return False
+    if p['vol'] == 'có':
+        est, v20 = lv.get('est'), st.get('v20')
+        return bool(est and v20 and est >= v20)
+    return True
+
+
+BROKE = 1.01      # đóng cửa trên trendline giảm ≥ 1% = đã vượt (để tìm nhịp pullback sau đó)
+
+
+def _retest_down_line(bounce):
+    """Đã vượt trendline giảm (trong TL_RECENT phiên gần nhất) rồi quay lại kiểm định đường từ phía trên.
+    Từ phiên vượt tới nay không phiên nào đóng cửa rơi khỏi vùng dưới đường (vượt hụt). Đang pullback: hôm nay giá thấp
+    chạm vùng trên đường. Bật lên: chạm vùng trong 3 phiên gần nhất (sau phiên vượt), hôm nay xanh và trên đường."""
+    def fn(st, lv, p):
+        td = st.get('td' + p['period'])
+        if not td:
+            return False
+        j = _first_above(td['cr'], BROKE)
+        if j is None:
+            return False
+        tol, last = p['tol'] / 100, lv['last']
+        line = td['v'] + td['s']
+        if min(td['cr'][j:]) < 1 - tol or last < line * (1 - tol):
+            return False
+        touched = min(lv.get('low') or last, last) <= line * (1 + tol)
+        if bounce:
+            touched = touched or any(r <= 1 + tol for r in td['lr'][max(j + 1, len(td['lr']) - 2):])
+            return touched and last > line and last > st['lc']
+        return touched
+    return fn
+
+
 def _sig(id_, group, label, params, fn):
     return Signal(id_, group, label, tuple(params), fn)
 
@@ -302,15 +451,17 @@ SIGNAL_LIST = [
     _sig('PriceCrossAboveEMA', 'ma', 'Giá cắt lên EMA({period})', [P_MA], _ema_cross(True)),
     _sig('PriceCrossBelowEMA', 'ma', 'Giá cắt xuống EMA({period})', [P_MA], _ema_cross(False)),
     _sig('ShortSMACrossAboveLongSMA', 'ma', 'SMA({short}) cắt lên SMA({long})',
-         [_p('short', 'SMA ngắn', (5, 10, 15), 5), _p('long', 'cắt lên SMA dài', (15, 20, 45), 15)], _sma_pair(True)),
+         [_p('short', 'SMA ngắn', (5, 10, 15, 20, 50), 5), _p('long', 'cắt lên SMA dài', (15, 20, 45, 50, 100, 200), 15)], _sma_pair(True)),
     _sig('ShortSMACrossBelowLongSMA', 'ma', 'SMA({short}) cắt xuống SMA({long})',
-         [_p('short', 'SMA ngắn', (5, 10, 15), 5), _p('long', 'cắt xuống SMA dài', (15, 20, 45), 15)], _sma_pair(False)),
+         [_p('short', 'SMA ngắn', (5, 10, 15, 20, 50), 5), _p('long', 'cắt xuống SMA dài', (15, 20, 45, 50, 100, 200), 15)], _sma_pair(False)),
     _sig('RSICrossAboveOverBoughtLine', 'rsi', 'RSI(14) đi vào vùng quá mua (trên {level})', [P_RSI_UP], _rsi('cross_up')),
     _sig('RSICrossBelowOverBoughtLine', 'rsi', 'RSI(14) thoát khỏi vùng quá mua (trên {level})', [P_RSI_UP], _rsi('cross_down')),
     _sig('RSIAboveOverBoughtLine', 'rsi', 'RSI(14) đang trong vùng quá mua (trên {level})', [P_RSI_UP], _rsi('above')),
     _sig('RSICrossBelowOverSoldLine', 'rsi', 'RSI(14) đi vào vùng quá bán (dưới {level})', [P_RSI_DOWN], _rsi('cross_down')),
     _sig('RSICrossAboveOverSoldLine', 'rsi', 'RSI(14) thoát khỏi vùng quá bán (dưới {level})', [P_RSI_DOWN], _rsi('cross_up')),
     _sig('RSIBelowOverSoldLine', 'rsi', 'RSI(14) đang trong vùng quá bán (dưới {level})', [P_RSI_DOWN], _rsi('below')),
+    _sig('RSIBottom', 'rsi', 'RSI tạo đáy khung {tf}: thoát quá bán {level} (đáy trong {look} nến), RSI trên Signal, '
+                             'giá trên MA10', [P_TF, P_RSI_DOWN, P_RSI_LOOK], _rsi_bottom),
     _sig('MFICrossAboveOverBoughtLine', 'mfi', 'MFI(14) đi vào vùng quá mua (trên {level})', [P_MFI_UP], _mfi('cross_up')),
     _sig('MFICrossBelowOverBoughtLine', 'mfi', 'MFI(14) thoát khỏi vùng quá mua (trên {level})', [P_MFI_UP], _mfi('cross_down')),
     _sig('MFIAboveOverBoughtLine', 'mfi', 'MFI(14) đang trong vùng quá mua (trên {level})', [P_MFI_UP], _mfi('above')),
@@ -333,6 +484,20 @@ SIGNAL_LIST = [
     _sig('MACDAboveZeroLine', 'macd', 'MACD đang ở trên đường 0', [], _macd('above_zero')),
     _sig('MACDCrossBelowZeroLine', 'macd', 'MACD cắt xuống đường 0', [], _macd('cross_below_zero')),
     _sig('MACDBelowZeroLine', 'macd', 'MACD đang ở dưới đường 0', [], _macd('below_zero')),
+    _sig('PullbackToSMA', 'pullback', 'Pullback về SMA({period}), vùng ±{tol}%, KL cạn: {dry}',
+         [P_PB_MA, P_PB_TOL, P_PB_DRY], _pullback('sma', False)),
+    _sig('PullbackBounceSMA', 'pullback', 'Bật lên từ SMA({period}), vùng ±{tol}%, KL cạn: {dry}',
+         [P_PB_MA, P_PB_TOL, P_PB_DRY], _pullback('sma', True)),
+    _sig('PullbackToTrendline', 'pullback', 'Pullback về trendline tăng {period}, vùng ±{tol}%, KL cạn: {dry}',
+         [P_PB_TL, P_PB_TOL, P_PB_DRY], _pullback('tl', False)),
+    _sig('PullbackBounceTrendline', 'pullback', 'Bật lên từ trendline tăng {period}, vùng ±{tol}%, KL cạn: {dry}',
+         [P_PB_TL, P_PB_TOL, P_PB_DRY], _pullback('tl', True)),
+    _sig('BreakDownTrendline', 'pullback', 'Vượt lên trendline giảm {period} ≥ {brk}%, KL ≥ TB20: {vol}',
+         [P_PB_TL, P_BRK, P_BRK_VOL], _break_down_line),
+    _sig('PullbackBrokenDownTrendline', 'pullback', 'Sau vượt trendline giảm {period}: pullback về ±{tol}%',
+         [P_PB_TL, P_PB_TOL], _retest_down_line(False)),
+    _sig('BounceBrokenDownTrendline', 'pullback', 'Sau vượt trendline giảm {period}: bật lên ±{tol}%',
+         [P_PB_TL, P_PB_TOL], _retest_down_line(True)),
 ]
 SIGNALS = {s.id: s for s in SIGNAL_LIST}
 
@@ -369,8 +534,13 @@ def _show(v):
 
 
 def param_text(value):
-    """Giá trị tham số như người dùng thấy: '1w' → '1 tuần', 3.5 → '3.5', 70.0 → '70'."""
-    return PERIOD_NAME.get(value, _show(value))
+    """Giá trị tham số như người dùng thấy: '1w' → '1 tuần', '15m' → '15 phút', 3.5 → '3.5', 70.0 → '70'."""
+    return TF_NAME.get(value) or PERIOD_NAME.get(value, _show(value))
+
+
+def signal_tf(sig):
+    """Khung nến tín hiệu cần: 'D' (nến ngày — mọi tín hiệu không có tham số khung) hoặc '15m'."""
+    return (sig.get('params') or {}).get('tf', 'D')
 
 
 def signal_title(sig):
@@ -398,9 +568,14 @@ def describe_signal(sig):
 
 def eval_signal(sig, st, lv):
     """Tín hiệu `sig` có đang đúng với mã có thống kê `st` và giá hiện tại `lv` không.
-    lv = {'last', 'high', 'low', 'volume', 'est'} (giá nghìn đồng). Thiếu số → False."""
+    lv = {'last', 'high', 'low', 'volume', 'est'} (giá nghìn đồng), thêm 'intra': {'15m': thống kê nến 15 phút}
+    khi có tiêu chí cần. Thiếu số → False."""
     s = SIGNALS.get(sig.get('id'))
-    if s is None or not _valid(st, lv):
+    if s is None:
+        return False
+    if signal_tf(sig) != 'D':
+        st = ((lv or {}).get('intra') or {}).get(signal_tf(sig))
+    if not _valid(st, lv):
         return False
     params = dict(sig.get('params') or {})
     if 'pct' in params:
