@@ -38,7 +38,7 @@ from symbols import SYMBOLS  # noqa: E402
 SYMBOL_SET = set(SYMBOLS)
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.8.0'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.8.1'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -101,7 +101,7 @@ OP_LABEL = [('gt', 'Lớn hơn (>)'), ('lt', 'Nhỏ hơn (<)'), ('eq', 'Bằng (
 # Điều kiện thêm kiểu FireAnt: "từ / đến / trong khoảng" (FireAnt tính cả mốc)
 METRIC_OP_LABEL = [('ge', 'Từ (≥)'), ('le', 'Đến (≤)'), ('bt', 'Trong khoảng')]
 METRIC_UNIT = {'pct': '%', 'pct0': '%', 'int': 'phiên', 'vol': 'cổ phiếu', 'svol': 'cổ phiếu', 'sbil': 'tỷ đồng',
-               'ago': 'phiên trước (0 = hôm nay)', 'price': 'nghìn đồng', 'bil': 'tỷ đồng', 'upct': '%'}
+               'ago': 'phiên trước (0 = hôm nay)', 'price': 'nghìn đồng', 'bil': 'tỷ đồng', 'upct': '%', 'ratio': '%'}
 # Cột có thể chọn để xếp trong Cài đặt (đủ cột bảng giá + cột kiểu FireAnt)
 SORT_COLUMNS = list(core.COLUMNS) + [(k, conditions.METRIC_LABEL[k]) for k in conditions.METRIC_KEYS]
 

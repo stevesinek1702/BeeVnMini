@@ -479,7 +479,7 @@ class TinHieu(unittest.TestCase):
         cat = conditions.catalog()
         self.assertEqual(list(cat), [g for g, _ in conditions.GROUPS])
         self.assertTrue(all(cat.values()))                                  # nhóm nào cũng có điều kiện
-        self.assertEqual(sum(len(v) for v in cat.values()), 43 + 79)        # 43 cột số + 79 tín hiệu
+        self.assertEqual(sum(len(v) for v in cat.values()), 45 + 79)        # 45 cột số + 79 tín hiệu
         self.assertEqual(cat['price'][0], ('Thay đổi giá 1 tuần (%)', 'metric', 'change1w'))     # cột số trước tín hiệu
         self.assertIn(('Giá cắt lên SMA(…)', 'signal', 'PriceCrossAboveSMA'), cat['ma'])
         self.assertIn(('MACD cắt lên đường 0', 'signal', 'MACDCrossAboveZeroLine'), cat['macd'])
@@ -676,6 +676,12 @@ class ChiBaoBoSung(unittest.TestCase):
         self.assertEqual(core.format_metric(12.345, 'upct'), ('12.3%', ''))
         self.assertEqual(core.format_metric(-45.67, 'num'), ('-45.7', ''))
         self.assertEqual(core.format_metric(3.46, 'bil'), ('3.5 tỷ', ''))
+        # KL dự kiến hôm nay so với KLTB 20 / 50 phiên (KLTB = 1000): "KL ≥ 80% TB 50 phiên" → volVs50 ≥ 80
+        m = conditions.tech_metrics(self.ST, 61, 1, est=800)
+        self.assertEqual((m['volVs20'], m['volVs50']), (80, 80))
+        self.assertIsNone(conditions.tech_metrics(self.ST, 61, 1)['volVs50'])        # chưa có KL dự kiến
+        self.assertEqual(core.format_metric(80, 'ratio'), ('80%', 'down'))
+        self.assertEqual(core.format_metric(150.4, 'ratio'), ('150%', 'up'))
 
 
 class CotSoKieuFireAnt(unittest.TestCase):

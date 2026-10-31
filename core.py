@@ -771,4 +771,6 @@ def format_metric(v, fmt):
         return _fixed(v, 1), ''
     if fmt == 'upct':                 # % không dấu (cách đỉnh / đáy, độ rộng dải…)
         return _fixed(v, 1) + '%', ''
+    if fmt == 'ratio':                # % so với mức trung bình: trên 100 xanh, dưới 100 đỏ (như cột % KL/TB)
+        return _fixed(v, 0) + '%', ('up' if v > 100 else ('down' if v < 100 else ''))
     return str(v), ''

@@ -51,6 +51,8 @@ METRICS = [
     ('avgVol100', 'KLTB 100 phiên', 'KLTB 100', 'volume', 'vol'),
     ('avgVol3m', 'KLTB 3 tháng', 'KLTB 3T', 'volume', 'vol'),
     ('avgValue20', 'GTTB 20 phiên (tỷ đồng)', 'GTTB 20', 'volume', 'bil'),
+    ('volVs20', 'KL dự kiến hôm nay so với KLTB 20 phiên (%)', 'KL/TB20', 'volume', 'ratio'),
+    ('volVs50', 'KL dự kiến hôm nay so với KLTB 50 phiên (%)', 'KL/TB50', 'volume', 'ratio'),
     ('foreignNetVol', 'KL nước ngoài mua ròng', 'KL NN ròng', 'volume', 'svol'),
     ('foreignNetValue', 'GT nước ngoài mua ròng (tỷ)', 'GT NN ròng', 'volume', 'sbil'),
     ('rsi14', 'RSI(14) hiện tại', 'RSI', 'rsi', 'num'),
@@ -81,6 +83,7 @@ _TECH_PERIOD = {'change1w': '1w', 'change1m': '1m', 'change3m': '3m', 'change6m'
 _TECH_AVGVOL = {'avgVol5': 'v5', 'avgVol10': 'v10', 'avgVol20': 'v20', 'avgVol50': 'v50', 'avgVol100': 'v100',
                 'avgVol3m': 'v3m', 'avgValue20': 'gv20'}
 _TECH_DIST = {'distSMA20': 20, 'distSMA50': 50}
+_TECH_VOLVS = {'volVs20': 'v20', 'volVs50': 'v50'}      # KL dự kiến cả phiên hôm nay / KLTB n phiên đã đóng × 100
 # Phiên vượt trendline giảm gần nhất (0 = hôm nay): cần quét lùi tech.last_break — nặng, chỉ tính khi có tiêu chí dùng.
 # Mỗi cột kèm 2 cột đi cùng (giá vượt, % hiện tại so với giá vượt): lọc cột nào trong nhóm thì cả 3 cùng hiện.
 BREAK_METRIC_KEYS = {'brkTL3m': '3m', 'brkTL6m': '6m'}
@@ -90,7 +93,7 @@ BREAK_ALL_KEYS = {k: grp for grp, ks in BREAK_COMPANIONS.items() for k in (grp, 
 INDICATOR_KEYS = ('rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct',
                   *(f'from{s}{p}' for s in ('High', 'Low') for p in ('1m', '3m', '6m', '1y')))
 # Cột phải có lịch sử nến mới tính được (các cột còn lại lấy thẳng từ quote)
-TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, *_TECH_DIST, *BREAK_ALL_KEYS, *INDICATOR_KEYS,
+TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, *_TECH_DIST, *_TECH_VOLVS, *BREAK_ALL_KEYS, *INDICATOR_KEYS,
                     'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp')
 
 
@@ -113,10 +116,14 @@ def tech_metrics(st, last, change, est=None):
     out = dict.fromkeys(_TECH_PERIOD, None)
     out.update(dict.fromkeys(_TECH_AVGVOL, None))
     out.update(dict.fromkeys(_TECH_DIST, None))
+    out.update(dict.fromkeys(_TECH_VOLVS, None))
     out.update(dict.fromkeys(BREAK_ALL_KEYS, None))
     out.update(upDays=None, downDays=None, upDaysBeforeDown=None, downDaysBeforeUp=None)
     if not st:
         return out
+    for key, sk in _TECH_VOLVS.items():
+        if est and st.get(sk):
+            out[key] = est * 100 / st[sk]
     if last and last > 0:
         for key, per in _TECH_PERIOD.items():
             px = st.get(f'px{per}')
