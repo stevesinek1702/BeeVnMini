@@ -1,12 +1,13 @@
 // Chỉ báo kỹ thuật tính từ nến ngày — chép từ tech.py của bản Python, giữ đúng thứ tự phép tính
 // để số ra khớp từng chữ số (xem pyfloat.js). Mọi con số tính trên các phiên ĐÃ ĐÓNG (bỏ nến hôm nay).
+// Riêng khung 15 phút (intradayStats): xét nến đã chốt gần nhất, không ghép giá hiện tại.
 // Giá tính bằng nghìn đồng; khối lượng bằng cổ phiếu. Không dính giao diện, không dính mạng.
 import { fsum, fmean, imean, pyRoundTo } from './pyfloat.js';
 
 export const PRICE_AVG_N = [4, 5, 9, 10, 14, 15, 19, 20, 44, 45, 49, 50, 99, 100, 199, 200];
 export const VOL_AVG_N = [4, 5, 9, 10, 14, 19, 20, 44];
 export const EMA_N = [5, 10, 15, 20, 45, 50, 100, 200];
-export const VERSION = 6;        // cùng số với tech.VERSION của Python: đổi khi thêm số thống kê mới → bộ đệm cũ bị bỏ
+export const VERSION = 7;        // cùng số với tech.VERSION của Python: đổi khi thêm số thống kê mới → bộ đệm cũ bị bỏ
 export const PERIODS = { '1w': ['d', 7], '2w': ['d', 14], '1m': ['m', 1], '3m': ['m', 3], '6m': ['m', 6], '1y': ['m', 12] };
 export const MIN_BARS = 20;
 
@@ -19,8 +20,16 @@ export const TL_PIVOT = 3, TL_MIN_GAP = 10, TL_MAX_SLOPE = 0.01;
 export const TL_TOL = 0.02, TL_EXT = 0.05, TL_RECENT = 10, TL_TOUCHES = 3;
 export const TL_MIN_BARS = 40;
 export const BREAK_DAYS = 20, BREAK_UP = 0.01;
+// RSI tạo đáy (luật Long của anh bên hệ phái sinh): Signal = WMA(14) của RSI(14); giữ RSI của RSI_KEEP nến đã đóng gần nhất
+export const RSI_SIGNAL_N = 14, RSI_KEEP = 30;
+// Nến 15 phút (dchart ghi giờ MỞ nến): các buổi khớp lệnh theo phút trong ngày, giờ VN. Nến ATC của HOSE mang giờ 14:45
+// → buổi chiều tính tới 15:00 (khung 14:45 coi như chưa chốt) cho chắc nến ATC đã lên dchart.
+export const INTRA_MIN = 15;
+export const INTRA_SESSIONS = [[9 * 60, 11 * 60 + 30], [13 * 60, 15 * 60]];
+export const INTRA_MIN_BARS = 60;     // mã ít khớp lệnh thì nến thưa, RSI 15 phút vô nghĩa → không tính
 
 const DAY_MS = 86400000;
+const VN_MS = 7 * 3600000;
 
 function daysInMonth(y, m) {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
@@ -77,6 +86,24 @@ export function wilderRsiParts(closes, n = 14) {
     al = (al * (n - 1) + Math.max(-d, 0)) / n;
   }
   return [ag, al];
+}
+
+export const rsiOf = (gain, loss) => (loss === 0 ? 100 : 100 - 100 / (1 + gain / loss));
+
+// RSI Wilder(n) tại `keep` nến cuối (cũ → mới), cùng cách tính wilderRsiParts; [] nếu chưa đủ n+1 nến
+export function rsiTail(closes, keep = RSI_KEEP, n = 14) {
+  if (closes.length < n + 1) return [];
+  const diffs = [];
+  for (let i = 1; i < closes.length; i++) diffs.push(closes[i] - closes[i - 1]);
+  let ag = fsum(diffs.slice(0, n).map((d) => Math.max(d, 0))) / n;
+  let al = fsum(diffs.slice(0, n).map((d) => Math.max(-d, 0))) / n;
+  const out = [rsiOf(ag, al)];
+  for (const d of diffs.slice(n)) {
+    ag = (ag * (n - 1) + Math.max(d, 0)) / n;
+    al = (al * (n - 1) + Math.max(-d, 0)) / n;
+    out.push(rsiOf(ag, al));
+  }
+  return out.slice(-keep);
 }
 
 // MFI: [dòng tiền dương n−1 phiên cuối, dòng tiền âm n−1 phiên cuối, MFI n phiên, giá điển hình phiên cuối]
@@ -282,6 +309,7 @@ export function statsFromBars(bars, today, dateOf, history = false) {
     out.e12 = out.e26 = out.sig = null;
   }
   [out.ag, out.al] = wilderRsiParts(closes);
+  out.rs = rsiTail(closes).map((x) => pyRoundTo(x, 4));
   [out.pmf, out.nmf, out.mfi] = moneyFlow(rows);
 
   for (const [key, [kind, k]] of Object.entries(PERIODS)) {
@@ -305,6 +333,44 @@ export function statsFromBars(bars, today, dateOf, history = false) {
     if (history) out[`tb${key}`] = lastBreak(rows, w);
   }
   return round6(out);
+}
+
+// ── Nến 15 phút ─────────────────────────────────────────────────────────
+
+// [ngày 'YYYY-MM-DD' giờ VN, mốc (phút trong ngày), đang trong buổi khớp lệnh?]. Trong buổi: giờ mở nến đang chạy;
+// ngoài giờ: giờ hết buổi vừa xong (11:30 / 15:00; trước giờ mở cửa, cuối tuần: 0).
+function intradaySlot(nowMs) {
+  const d = new Date(nowMs + VN_MS);
+  const date = d.toISOString().slice(0, 10);
+  const wd = d.getUTCDay();
+  const weekday = wd !== 0 && wd !== 6;
+  const m = d.getUTCHours() * 60 + d.getUTCMinutes();
+  if (weekday) for (const [a, b] of INTRA_SESSIONS) if (a <= m && m < b) return [date, m - m % INTRA_MIN, true];
+  const ends = weekday ? INTRA_SESSIONS.map(([, b]) => b).filter((b) => b <= m) : [];
+  return [date, ends.length ? ends[ends.length - 1] : 0, false];
+}
+
+// Giờ mở nến 15 phút đang chạy lúc nowMs (giây Unix): nến từ giờ này trở đi chưa chốt.
+// null = ngoài giờ khớp lệnh (nghỉ trưa, sau giờ, trước giờ mở cửa, cuối tuần) — mọi nến đã chốt.
+export function intradayCutoff(nowMs) {
+  const [date, m, open] = intradaySlot(nowMs);
+  return open ? (Date.parse(date + 'T00:00:00Z') - VN_MS) / 1000 + m * 60 : null;
+}
+
+// Mốc của bộ nến 15 phút dùng được lúc nowMs, vd '2026-10-29 09:00'. Sang mốc mới = vừa có nến chốt → tải lại.
+export function intradayKey(nowMs) {
+  const [date, m] = intradaySlot(nowMs);
+  return `${date} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+// Số thống kê khung 15 phút của 1 mã tại nến đã chốt gần nhất — nến có giờ mở < cutoff (giây Unix; null = mọi nến).
+// null nếu quá ít nến.
+export function intradayStats(bars, cutoff = null) {
+  const rows = closedBars(bars, cutoff === null ? Infinity : cutoff, (t) => t);     // 'ngày' ở đây là giây Unix
+  if (rows.length < INTRA_MIN_BARS) return null;
+  const closes = rows.map((r) => r[4]);
+  return round6({ n: rows.length, lt: rows[rows.length - 1][0], lc: closes[closes.length - 1],
+    p10: fmean(closes.slice(-10)), rs: rsiTail(closes).map((x) => pyRoundTo(x, 4)) });
 }
 
 // ── Khối lượng dự kiến cả phiên (cách FireAnt đổi giờ hiện tại → số phút đã giao dịch) ──

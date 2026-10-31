@@ -445,7 +445,7 @@ test('danh mục cho bộ chọn điều kiện', () => {
   const cat = cond.catalog();
   assert.deepEqual(Object.keys(cat), cond.GROUPS.map(([g]) => g));
   assert.ok(Object.values(cat).every((v) => v.length));
-  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 24 + 42);
+  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 24 + 43);
   assert.deepEqual(cat.price[0], ['Thay đổi giá 1 tuần (%)', 'metric', 'change1w']);
   assert.ok(cat.ma.some((x) => x[2] === 'PriceCrossAboveSMA' && x[0] === 'Giá cắt lên SMA(…)'));
   assert.ok(cat.macd.some((x) => x[2] === 'MACDCrossAboveZeroLine' && x[0] === 'MACD cắt lên đường 0'));
@@ -454,13 +454,104 @@ test('danh mục cho bộ chọn điều kiện', () => {
   assert.equal(cond.paramText(3.5), '3.5');
 });
 
-test('danh mục đủ 42 tín hiệu', () => {
-  assert.equal(cond.SIGNAL_LIST.length, 42);
+test('danh mục đủ 43 tín hiệu', () => {
+  assert.equal(cond.SIGNAL_LIST.length, 43);
   const groups = new Set(cond.GROUPS.map(([g]) => g));
   for (const s of cond.SIGNAL_LIST) {
     assert.ok(groups.has(s.group));
     for (const p of s.params) assert.ok(p.choices.includes(p.default), `${s.id}.${p.id}`);
   }
+});
+
+// ── RSI tạo đáy (luật Long hệ phái sinh của anh) + chọn khung 15 phút / ngày ──
+// RSI 30 nến 15 phút đã chốt: rơi xuống đáy 23 (13 nến trước) rồi đi lên 44
+const RS = [...Array(10).fill(50), 45, 40, 35, 30, 26, 24, 23, 25, 27, 29, 31, 33, 35, 37, 38, 39, 40, 41, 42, 44];
+const ev15 = ({ rs = RS, lc = 11, p10 = 10, ...params } = {}) =>
+  cond.evalSignal(sig('RSIBottom', { tf: '15m', ...params }), null, { ...lv(lc), intra: { '15m': { rs, lc, p10 } } });
+
+test('RSI tạo đáy: đủ 3 dấu hiệu khung 15 phút', () => {
+  assert.equal(ev15(), true);
+  assert.equal(ev15({ look: 8 }), false);                         // đáy 23 nằm ngoài 8 nến gần nhất
+  assert.equal(ev15({ rs: [...RS.slice(0, -1), 29] }), false);    // RSI chưa thoát vùng 30
+  assert.equal(ev15({ rs: [...RS.slice(0, -1), 31] }), false);    // thoát 30 nhưng tụt dưới Signal (WMA14 ≈ 36.3)
+  assert.equal(ev15({ lc: 9.9 }), false);                         // giá dưới MA10
+  assert.equal(ev15({ level: 25 }), true);
+  assert.equal(ev15({ level: 20 }), false);                       // đáy chưa xuống tới 20
+  assert.equal(ev15({ rs: RS.slice(-10) }), false);               // thiếu nến (WMA14 cần 14 RSI)
+  // Khung 15 phút chỉ đọc thống kê nến 15 phút: chưa tải (hoặc mã ít nến) thì không khớp
+  const s = sig('RSIBottom', { tf: '15m' });
+  assert.equal(cond.evalSignal(s, { rs: RS, lc: 11, p10: 10 }, lv(11)), false);
+  assert.equal(cond.evalSignal(s, { lc: 1 }, { ...lv(11), intra: { '15m': {} } }), false);
+});
+
+test('RSI tạo đáy: khung ngày ghép giá hiện tại khớp với nến đã chốt', () => {
+  // Rơi đều 60 nến rồi tăng 3 nến (RSI ≈ 28.6): giá hiện tại quyết định nến thứ 4 có đủ 3 dấu hiệu không
+  const closes = [...Array.from({ length: 60 }, (_, i) => 60 - 0.5 * i), ...[1, 2, 3].map((j) => 30.5 + 0.8 * j)];
+  const [bars, days] = makeBars(closes.length, { close: (i) => closes[i] });
+  const st = tech.statsFromBars(bars, addDays(days[days.length - 1], 1), keep);
+  const seen = new Set();
+  for (const live of [31.5, 32.4, 32.9, 33.3, 33.7, 35]) {
+    const c = [...closes, live];
+    const intra = tech.intradayStats({ s: 'ok', t: c.map((_, i) => i), o: c, h: c, l: c, c, v: c.map(() => 1) });
+    const want = cond.evalSignal(sig('RSIBottom', { tf: '15m' }), null, { ...lv(live), intra: { '15m': intra } });
+    assert.equal(cond.evalSignal(sig('RSIBottom', { tf: 'D' }), st, lv(live)), want, String(live));
+    seen.add(want);
+  }
+  assert.deepEqual([...seen].sort(), [false, true]);              // có cả ca khớp lẫn không khớp
+});
+
+test('RSI từng nến khớp Wilder', () => {
+  const closes = Array.from({ length: 60 }, (_, i) => 10 + (i % 7) - (i % 3) * 0.5);
+  const rs = tech.rsiTail(closes);
+  assert.equal(rs.length, tech.RSI_KEEP);
+  near(rs[rs.length - 1], tech.rsiOf(...tech.wilderRsiParts(closes)));
+  near(rs[rs.length - 2], tech.rsiOf(...tech.wilderRsiParts(closes.slice(0, -1))));
+  assert.deepEqual(tech.rsiTail(closes.slice(0, 14)), []);
+  assert.equal(statsOf(60)[0].rs.length, tech.RSI_KEEP);         // nến ngày cũng giữ RSI từng nến
+});
+
+test('nến 15 phút đã chốt', () => {
+  const at = (d, h, m) => Date.UTC(2026, 9, d, h - 7, m, 30);     // 29/10 thứ Năm, 31/10 thứ Bảy
+  const sec = (d, h, m) => Date.UTC(2026, 9, d, h - 7, m) / 1000;
+  assert.equal(tech.intradayCutoff(at(29, 9, 7)), sec(29, 9, 0));
+  assert.equal(tech.intradayCutoff(at(29, 11, 29)), sec(29, 11, 15));
+  assert.equal(tech.intradayCutoff(at(29, 14, 50)), sec(29, 14, 45));    // nến ATC chờ tới 15:00
+  for (const a of [[29, 8, 50], [29, 11, 30], [29, 12, 59], [29, 15, 0], [31, 10, 0]]) {
+    assert.equal(tech.intradayCutoff(at(...a)), null, String(a));
+  }
+  assert.equal(tech.intradayKey(at(29, 9, 7)), '2026-10-29 09:00');
+  assert.equal(tech.intradayKey(at(29, 12, 0)), '2026-10-29 11:30');     // nghỉ trưa: đã có nến 11:15 chốt
+  assert.equal(tech.intradayKey(at(29, 20, 0)), '2026-10-29 15:00');
+  assert.equal(tech.intradayKey(at(29, 8, 0)), '2026-10-29 00:00');
+  assert.equal(tech.intradayKey(at(31, 10, 0)), '2026-10-31 00:00');
+  assert.equal(tech.intradayKey(at(30, 6, 0)), '2026-10-30 00:00');      // 6h sáng giờ VN = 23h UTC hôm trước
+  // Nến có giờ mở từ cutoff trở đi (đang chạy) bị bỏ; null = mọi nến; quá ít nến → null
+  const c = Array.from({ length: 70 }, (_, i) => 10 + (i % 5));
+  const bars = { s: 'ok', t: c.map((_, i) => i * 900), o: c, h: c, l: c, c, v: c.map(() => 1) };
+  const st = tech.intradayStats(bars, 65 * 900);
+  assert.deepEqual([st.n, st.lt, st.lc], [65, 64 * 900, c[64]]);
+  assert.equal(st.p10, c.slice(55, 65).reduce((a, b) => a + b) / 10);
+  assert.equal(tech.intradayStats(bars).n, 70);
+  assert.equal(tech.intradayStats(bars, 50 * 900), null);
+  assert.equal(tech.intradayStats({ s: 'no_data' }), null);
+});
+
+test('RSI tạo đáy: tham số, mô tả và nối vào bộ lọc', () => {
+  assert.deepEqual(sig('RSIBottom').params, { tf: '15m', level: 30, look: 16 });
+  assert.deepEqual(sig('RSIBottom', { tf: '4h', look: 17 }).params, { tf: '15m', level: 30, look: 16 });
+  assert.equal(cond.describeSignal(sig('RSIBottom', { tf: 'D' })),
+    'RSI tạo đáy khung ngày: thoát quá bán 30 (đáy trong 16 nến), RSI trên Signal, giá trên MA10');
+  assert.equal(cond.paramText('15m'), '15 phút');
+  const m15 = { signals: [sig('RSIBottom')] }, day = { signals: [sig('RSIBottom', { tf: 'D' })] };
+  assert.deepEqual([core.needsIntraday(m15), core.needsTech(m15)], [true, false]);    // khỏi tải nến ngày cả năm
+  assert.deepEqual([core.needsIntraday(day), core.needsTech(day)], [false, true]);
+  assert.equal(core.needsIntraday({ signals: [sig('MACDAboveZeroLine')] }), false);
+  const q = { Symbol: 'AAA', Exchange: 'HOSTC', PriceCurrent: 11000, TotalVolume: 0 };
+  const st = { rs: RS, lc: 11, p10: 10 };
+  const row = core.transformQuote(q, null, null, Date.now(), { '15m': st });
+  assert.deepEqual(row._live.intra, { '15m': st });
+  assert.deepEqual(core.applySignals([row], m15.signals), [row]);
+  assert.ok(!('intra' in core.transformQuote(q)._live));
 });
 
 // ── Cột số kiểu FireAnt ─────────────────────────────────────────────────

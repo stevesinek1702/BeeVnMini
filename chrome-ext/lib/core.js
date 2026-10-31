@@ -91,9 +91,10 @@ export function quoteVnDate(q) {
   return Number.isNaN(ms) ? null : new Date(ms + VN_MS).toISOString().slice(0, 10);
 }
 
-// Quote FireAnt → hàng bảng giá. hist = MA / KL trung bình; techStats = thống kê kỹ thuật của mã; nowMs = giờ hiện tại.
+// Quote FireAnt → hàng bảng giá. hist = MA / KL trung bình; techStats = thống kê kỹ thuật của mã; nowMs = giờ hiện tại;
+// intra = {'15m': thống kê nến 15 phút} (chỉ khi có tiêu chí dùng khung 15 phút).
 // Hàng mang thêm _tech / _live để các điều kiện tín hiệu tính; hai khoá này không hiện ra bảng.
-export function transformQuote(q, hist = null, techStats = null, nowMs = Date.now()) {
+export function transformQuote(q, hist = null, techStats = null, nowMs = Date.now(), intra = null) {
   const h = hist || {};
   const vol = q.TotalVolume || 0;
   const k = (v) => (v === null || v === undefined ? null : Number(fixed(v / 1000, 2)));
@@ -127,6 +128,7 @@ export function transformQuote(q, hist = null, techStats = null, nowMs = Date.no
   Object.assign(row, conditions.techMetrics(st, price, change, est));
   row._tech = st;
   row._live = { last: price, high: k(q.PriceHigh), low: k(q.PriceLow), volume: vol, est };
+  if (intra) row._live.intra = intra;
   return row;
 }
 
@@ -253,7 +255,13 @@ const TECH_KEYS = new Set(conditions.TECH_METRIC_KEYS);
 
 // Tiêu chí có dùng điều kiện cần lịch sử ~1 năm (thống kê kỹ thuật) không — không thì khỏi tải
 export function needsTech(c) {
-  return !!(c.signals && c.signals.length) || activeFilterKeys(c.filters).some((k) => TECH_KEYS.has(k));
+  return (c.signals || []).some((s) => conditions.signalTf(s) === 'D')
+    || activeFilterKeys(c.filters).some((k) => TECH_KEYS.has(k));
+}
+
+// Tiêu chí có tín hiệu khung 15 phút không — có thì tải nến 15 phút sau mỗi lần chốt nến
+export function needsIntraday(c) {
+  return (c.signals || []).some((s) => conditions.signalTf(s) === '15m');
 }
 
 // Tiêu chí có lọc theo phiên vượt trendline giảm không — có thì phải quét lùi khi tải chỉ báo

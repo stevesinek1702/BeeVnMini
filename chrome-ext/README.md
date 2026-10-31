@@ -23,7 +23,8 @@ Mỗi lần mở lại Chrome phải bấm **Mở cửa sổ nổi** một lần
 | Đặt / đổi bộ lọc | Phần **⚙ Cài đặt bộ lọc** bên phải tab (trên cửa sổ nổi bấm ⚙ để nhảy về tab). Sửa xong bấm **Lưu** |
 | Thêm tiêu chí thứ 2, 3… | **＋ Thêm tiêu chí** → đặt tên, sàn, kiểu báo, điều kiện → **Lưu**. Mỗi tiêu chí một khối trên bảng; đổi qua lại bằng ô *Tiêu chí*, bỏ bằng **Xoá** |
 | Lọc theo cột có sẵn (Giá, % Thay đổi, KLGD, % KL/TB, GTGD, MA10/20/45, Lực cầu) | Các ô bên trái: chọn > < = và gõ số. Để trống = không lọc |
-| Thêm điều kiện (RSI, MFI, MACD, Bollinger, cắt SMA/EMA, vượt đỉnh, KL dự kiến, nước ngoài…) | Cột **Thêm điều kiện**: chọn nhóm → điều kiện → đặt giá trị → **＋ Thêm** (✕ để bỏ). 24 cột số + 42 tín hiệu y như bản Python |
+| Thêm điều kiện (RSI, MFI, MACD, Bollinger, cắt SMA/EMA, vượt đỉnh, KL dự kiến, nước ngoài…) | Cột **Thêm điều kiện**: chọn nhóm → điều kiện → đặt giá trị → **＋ Thêm** (✕ để bỏ). 24 cột số + 43 tín hiệu y như bản Python |
+| RSI tạo đáy (khung 15 phút hoặc ngày) | Nhóm **RSI (14)** → *RSI tạo đáy khung …* → chọn **khung** `15 phút` / `ngày`, ngưỡng quá bán (30), đáy trong (16 nến). Khớp khi đủ 3 dấu hiệu: trong 16 nến gần nhất RSI(14) từng ≤ 30 và nay đã thoát lên trên 30, RSI trên đường Signal (WMA14 của RSI), giá đóng cửa trên MA10. Khung **15 phút** xét nến **đã chốt** gần nhất, tự tải nến 15 phút cả thị trường ~20 giây sau mỗi lần chốt nến (~30 giây/lượt), nên danh sách đổi mỗi 15 phút; mã dưới 60 nến trong 3 tuần không tính. Khung **ngày** ghép giá hiện tại như các điều kiện khác |
 | Pullback & trendline | Nhóm **Pullback & trendline**: pullback / bật lên từ SMA 10-20-50 và trendline tăng 3T/6T; vượt trendline giảm; pullback / bật lên sau vượt; cột **Vượt TL 3T/6T** (vd *Đến ≤ 5* = vượt trong tuần), **Giá vượt**, **% từ vượt**, **↕SMA20/50**. Luật kẻ trendline y bản Python |
 | Khi có mã mới | Ô *Khi có mã mới* của từng tiêu chí: **Đọc tên mã** (giọng Windows "Microsoft An") / **Kêu "ting"** / **Im lặng**; nút **Nghe thử**. Mã mới sáng vàng 6 giây |
 | ★ Theo dõi | Ô **★ Theo dõi** (gõ `VIB MBB HPG`) → khối riêng cuối bảng. Hoặc **chuột phải lên một mã** trên bảng → ★ Theo dõi / ✕ Bỏ theo dõi |
@@ -36,7 +37,8 @@ Mỗi lần mở lại Chrome phải bấm **Mở cửa sổ nổi** một lần
 
 Giá tự lấy **30 giây/lần** trong giờ giao dịch (8:45–15:15, thứ 2–6), ngoài giờ 10 phút/lần. MA / KL trung bình tự
 tính từ nến ngày mỗi ngày một lần (~30 giây). Chỉ báo kỹ thuật + trendline chỉ tải khi có tiêu chí cần
-(~1 phút cho cả thị trường, tính ở luồng phụ nên bảng không đơ), lưu lại dùng cả ngày.
+(~1 phút cho cả thị trường, tính ở luồng phụ nên bảng không đơ), lưu lại dùng cả ngày. Nến 15 phút chỉ tải khi có
+tiêu chí khung 15 phút, sau mỗi lần chốt nến (nghỉ trưa, ngoài giờ thì đứng yên).
 
 ## Khác bản Python
 
@@ -56,11 +58,14 @@ tính từ nến ngày mỗi ngày một lần (~30 giây). Chỉ báo kỹ thu�
 | `app.js` | Trang chính: vòng lấy dữ liệu, lọc, báo mã mới, cửa sổ nổi |
 | `view.js` | Vẽ bảng (dựng khung một lần, các lượt sau chỉ đổi chữ trong ô → không nháy) |
 | `settings.js` | Cài đặt bộ lọc |
-| `data.js`, `techworker.js` | Lấy giá và nến ngày; luồng phụ tính chỉ báo |
+| `data.js`, `techworker.js` | Lấy giá, nến ngày và nến 15 phút; luồng phụ tính chỉ báo |
 | `sw.js` | Hẹn giờ 30 giây (`chrome.alarms`), nút trên thanh công cụ |
 | `icons/` | Logo con ong / tổ ong (`logo.svg`, bản rút gọn `logo-small.svg`, icon PNG 16–128; vẽ lại bằng `ve-logo.py`) |
-| `tests/` | `node --test` (69 test, chép từ `tests/` của bản Python) |
+| `tests/` | `node --test` (74 test, chép từ `tests/` của bản Python) |
 
 Đã đối chiếu với bản Python 1.7.0 trên nến thật cả thị trường (21–22/10/2026): 1.191.909 con số thống kê
 (gồm trendline, phiên vượt), 25,4 triệu lần đánh giá 42 tín hiệu, 69.312 bộ cột số — **0 sai lệch**;
 chạy cả extension trong Chrome rồi đưa đúng dữ liệu đó vào `core.py`: các khối lọc ra cùng danh sách mã, cùng thứ tự.
+RSI tạo đáy (31/10/2026): 11.823 bộ thống kê nến 15 phút (~402 nghìn con số) + toàn bộ thống kê nến ngày 1.443 mã,
+~1,1 triệu lần đánh giá — **0 sai lệch**; chạy extension trong Chromium, khối "RSI tạo đáy 15 phút, GTGD > 5" ra đúng
+14 mã, cùng thứ tự với bản Python.

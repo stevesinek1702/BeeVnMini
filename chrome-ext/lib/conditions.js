@@ -3,7 +3,9 @@
 //   • SIGNALS — tín hiệu đúng / sai kèm tham số (giá cắt lên SMA(5), RSI vào vùng quá mua trên 70…).
 // Số thống kê tính ở phiên đã đóng gần nhất (tech.js) rồi ghép giá hiện tại vào. Giá tính bằng nghìn đồng:
 // khoảng đệm 0.05 ở EMA / Bollinger là 50đ (một bước giá), y như FireAnt.
+// Tín hiệu có tham số tf (khung) = '15m' thì tính trên nến 15 phút đã chốt (lv.intra['15m']) thay cho nến ngày.
 import * as tech from './tech.js';
+import { fsum } from './pyfloat.js';
 
 export const GROUPS = [['price', 'Giá'], ['volume', 'Khối lượng'], ['ma', 'Đường trung bình'],
   ['rsi', 'RSI (14)'], ['mfi', 'MFI (14)'], ['bb', 'Bollinger Band (20)'], ['macd', 'MACD'],
@@ -115,6 +117,9 @@ const P_HIGHLOW = P('period', 'trong', Object.keys(PERIOD_NAME), '1y');
 const P_MA = P('period', 'kỳ (phiên)', MA_PERIODS, 5);
 const P_RSI_UP = P('level', 'ngưỡng quá mua', [60, 65, 70, 75, 80, 85, 90], 70, true, 0, 100);
 const P_RSI_DOWN = P('level', 'ngưỡng quá bán', [10, 15, 20, 25, 30, 35, 40], 30, true, 0, 100);
+export const TF_NAME = { '15m': '15 phút', D: 'ngày' };
+const P_TF = P('tf', 'khung', Object.keys(TF_NAME), '15m');
+const P_RSI_LOOK = P('look', 'đáy trong (nến)', [8, 12, 16, 20, 24, tech.RSI_KEEP], 16);
 const P_MFI_UP = P('level', 'ngưỡng quá mua', [70, 75, 80, 85, 90], 80, true, 0, 100);
 const P_MFI_DOWN = P('level', 'ngưỡng quá bán', [10, 15, 20, 25, 30], 20, true, 0, 100);
 const P_BB = P('std', 'độ lệch chuẩn', [2, 3.5], 2, true, 0.5, 6);
@@ -173,13 +178,11 @@ const smaPair = (up) => (st, lv, p) => {
 };
 
 // --- RSI(14) ---
-const rsiOf = (gain, loss) => (loss === 0 ? 100 : 100 - 100 / (1 + gain / loss));
-
 export function rsiNow(st, last) {
   const ag = st.ag, al = st.al, lc = st.lc;
   if (!nz(ag) || !nz(al) || !nz(lc)) return [null, null];
   const d = last - lc;
-  return [rsiOf(ag, al), rsiOf(ag * 13 + Math.max(d, 0), al * 13 + Math.max(-d, 0))];
+  return [tech.rsiOf(ag, al), tech.rsiOf(ag * 13 + Math.max(d, 0), al * 13 + Math.max(-d, 0))];
 }
 
 const rsi = (kind) => (st, lv, p) => {
@@ -188,6 +191,27 @@ const rsi = (kind) => (st, lv, p) => {
   const a = p.level;
   return { cross_up: prev <= a && a < live, cross_down: prev >= a && a > live, above: live > a, below: live < a }[kind];
 };
+
+// RSI tạo đáy (luật Long của anh bên hệ phái sinh): trong `look` nến gần nhất RSI(14) từng ≤ ngưỡng quá bán, nay đã
+// thoát lên trên ngưỡng + RSI trên Signal (WMA14 của RSI) + giá đóng cửa trên MA10 (SMA10).
+// Khung ngày ghép giá hiện tại như các tín hiệu khác; khung 15 phút xét nến đã chốt gần nhất (xem _rsi_bottom).
+function rsiBottom(st, lv, p) {
+  const rs = [...(st.rs || [])];
+  let price, ma;
+  if (p.tf === 'D') {
+    rs.push(rsiNow(st, lv.last)[1]);
+    price = lv.last;
+    ma = smaLive(st, lv.last, 10);
+  } else {
+    price = st.lc;
+    ma = st.p10;
+  }
+  const n = tech.RSI_SIGNAL_N, k = p.look;
+  if (rs.some((r) => !nz(r)) || rs.length < Math.max(n, k) || !truthy(price) || !truthy(ma)) return false;
+  const signal = fsum(rs.slice(-n).map((r, i) => (i + 1) * r)) / (n * (n + 1) / 2);    // WMA: nến mới nhất nặng nhất
+  const last = rs[rs.length - 1];
+  return Math.min(...rs.slice(-k)) <= p.level && p.level < last && last > signal && price > ma;
+}
 
 // --- MFI(14) ---
 export function mfiNow(st, lv) {
@@ -352,6 +376,8 @@ export const SIGNAL_LIST = [
   S('RSICrossBelowOverSoldLine', 'rsi', 'RSI(14) đi vào vùng quá bán (dưới {level})', [P_RSI_DOWN], rsi('cross_down')),
   S('RSICrossAboveOverSoldLine', 'rsi', 'RSI(14) thoát khỏi vùng quá bán (dưới {level})', [P_RSI_DOWN], rsi('cross_up')),
   S('RSIBelowOverSoldLine', 'rsi', 'RSI(14) đang trong vùng quá bán (dưới {level})', [P_RSI_DOWN], rsi('below')),
+  S('RSIBottom', 'rsi', 'RSI tạo đáy khung {tf}: thoát quá bán {level} (đáy trong {look} nến), RSI trên Signal, '
+    + 'giá trên MA10', [P_TF, P_RSI_DOWN, P_RSI_LOOK], rsiBottom),
   S('MFICrossAboveOverBoughtLine', 'mfi', 'MFI(14) đi vào vùng quá mua (trên {level})', [P_MFI_UP], mfi('cross_up')),
   S('MFICrossBelowOverBoughtLine', 'mfi', 'MFI(14) thoát khỏi vùng quá mua (trên {level})', [P_MFI_UP], mfi('cross_down')),
   S('MFIAboveOverBoughtLine', 'mfi', 'MFI(14) đang trong vùng quá mua (trên {level})', [P_MFI_UP], mfi('above')),
@@ -429,10 +455,13 @@ export function normalizeSignal(raw) {
   return { id: sig.id, params };
 }
 
-// Giá trị tham số như người dùng thấy: '1w' → '1 tuần', 3.5 → '3.5', 70 → '70'
+// Giá trị tham số như người dùng thấy: '1w' → '1 tuần', '15m' → '15 phút', 3.5 → '3.5', 70 → '70'
 export function paramText(value) {
-  return PERIOD_NAME[value] ?? String(value);
+  return TF_NAME[value] ?? PERIOD_NAME[value] ?? String(value);
 }
+
+// Khung nến tín hiệu cần: 'D' (nến ngày — mọi tín hiệu không có tham số khung) hoặc '15m'
+export const signalTf = (sig) => ((sig && sig.params) || {}).tf ?? 'D';
 
 // Tên tín hiệu cho bộ chọn: chỗ tham số thay bằng '…'
 export const signalTitle = (sig) => sig.label.replace(/\{\w+\}/g, '…');
@@ -453,10 +482,13 @@ export function describeSignal(sig) {
   return s.label.replace(/\{(\w+)\}/g, (m, k) => (k in params ? paramText(params[k]) : m));
 }
 
-// Tín hiệu `sig` có đang đúng với thống kê `st` và giá hiện tại `lv` không. Thiếu số → false.
+// Tín hiệu `sig` có đang đúng với thống kê `st` và giá hiện tại `lv` không. lv.intra = {'15m': thống kê nến 15 phút}
+// khi có tiêu chí cần. Thiếu số → false.
 export function evalSignal(sig, st, lv) {
   const s = SIGNALS[sig && sig.id];
-  if (!s || !valid(st, lv)) return false;
+  if (!s) return false;
+  if (signalTf(sig) !== 'D') st = ((lv && lv.intra) || {})[signalTf(sig)];
+  if (!valid(st, lv)) return false;
   const params = { ...((sig && sig.params) || {}) };
   if ('pct' in params) params.pct = params.pct / 100;      // lưu theo % (50), tính theo tỷ lệ (0.5)
   try {

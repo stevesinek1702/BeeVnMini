@@ -62,7 +62,8 @@ export class Settings {
         <div class="right">
           <h3>Thêm điều kiện</h3>
           <p class="hint">Chọn nhóm → điều kiện → đặt giá trị → ＋ Thêm. Điều kiện sẽ hiện ở danh sách bên trái.
-          Cần lịch sử giá (RSI, MACD, SMA, pullback, trendline, đỉnh/đáy…): lần đầu dùng sẽ tải ~1 phút.</p>
+          Cần lịch sử giá (RSI, MACD, SMA, pullback, trendline, đỉnh/đáy…): lần đầu dùng sẽ tải ~1 phút.
+          Khung 15 phút: xét nến đã chốt, tự tải lại mỗi 15 phút.</p>
           <select id="s-grp" class="wide"></select>
           <select id="s-cond" class="wide"></select>
           <div id="s-form"></div>
