@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bee Mini",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Bảng giá nhỏ luôn nổi (Document Picture-in-Picture) với nhiều tiêu chí lọc, pullback / trendline, đọc mã mới bằng giọng Việt.",
   "minimum_chrome_version": "120",
   "permissions": ["alarms", "tts", "storage", "unlimitedStorage"],

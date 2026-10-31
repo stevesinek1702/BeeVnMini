@@ -445,7 +445,7 @@ test('danh mục cho bộ chọn điều kiện', () => {
   const cat = cond.catalog();
   assert.deepEqual(Object.keys(cat), cond.GROUPS.map(([g]) => g));
   assert.ok(Object.values(cat).every((v) => v.length));
-  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 43 + 79);
+  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 45 + 79);
   assert.deepEqual(cat.price[0], ['Thay đổi giá 1 tuần (%)', 'metric', 'change1w']);
   assert.ok(cat.ma.some((x) => x[2] === 'PriceCrossAboveSMA' && x[0] === 'Giá cắt lên SMA(…)'));
   assert.ok(cat.macd.some((x) => x[2] === 'MACDCrossAboveZeroLine' && x[0] === 'MACD cắt lên đường 0'));
@@ -642,6 +642,12 @@ test('cột số chỉ báo', () => {
   assert.deepEqual(core.formatMetric(12.345, 'upct'), ['12.3%', '']);
   assert.deepEqual(core.formatMetric(-45.67, 'num'), ['-45.7', '']);
   assert.deepEqual(core.formatMetric(3.46, 'bil'), ['3.5 tỷ', '']);
+  // KL dự kiến hôm nay so với KLTB 20 / 50 phiên: "KL ≥ 80% TB 50 phiên" → volVs50 ≥ 80
+  const t = cond.techMetrics(ST, 61, 1, 800);
+  assert.deepEqual([t.volVs20, t.volVs50], [80, 80]);
+  assert.equal(cond.techMetrics(ST, 61, 1).volVs50, null);
+  assert.deepEqual(core.formatMetric(80, 'ratio'), ['80%', 'down']);
+  assert.deepEqual(core.formatMetric(150.4, 'ratio'), ['150%', 'up']);
 });
 
 // ── Cột số kiểu FireAnt ─────────────────────────────────────────────────

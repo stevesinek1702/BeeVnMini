@@ -62,8 +62,11 @@ export class Settings {
     h.replaceChildren();
     const $ = (sel) => h.querySelector(sel);
     h.append(
-      el('div', { class: 'st-title' }, el('h2', {}, '⚙ Bộ lọc'),
-        el('span', { class: 'hint' }, 'Mỗi tiêu chí là một khối trên bảng giá; mã phải thoả tất cả điều kiện của tiêu chí.')),
+      el('div', { class: 'st-title' }, el('h2', {}, '⚙ Bộ lọc'), el('span', { id: 's-status' })),
+      el('ol', { class: 'steps' },
+        el('li', {}, el('b', {}, 'Tạo tiêu chí'), ': gõ cho ✨ AI, chọn 📋 Mẫu, hoặc tự thêm điều kiện ở thẻ tiêu chí.'),
+        el('li', {}, el('b', {}, 'Bảng giá bên trái tự lọc ngay'), ' — không cần bấm Lưu. Mỗi tiêu chí là một khối; mã phải thoả tất cả điều kiện.'),
+        el('li', {}, 'Bấm ', el('b', {}, 'Mở cửa sổ nổi'), ' (trên cùng) để bảng giá nổi trên mọi cửa sổ.')),
       el('div', { class: 'card ai' },
         el('h3', {}, '✨ Tạo tiêu chí bằng AI'),
         el('p', { class: 'hint' }, 'Gõ tiêu chí như nói chuyện, AI sẽ dựng bộ lọc. Vd: ',
@@ -79,7 +82,8 @@ export class Settings {
         el('summary', {}, '★ Danh mục theo dõi'),
         el('p', { class: 'hint' }, 'Gõ mã cách nhau bằng dấu cách (vd VIB MBB HPG) → khối riêng cuối bảng giá. ',
           'Hoặc chuột phải lên một mã trên bảng giá → ★ Theo dõi.'),
-        el('input', { id: 's-watch', class: 'wide', placeholder: 'VIB MBB HPG' })),
+        el('input', { id: 's-watch', class: 'wide', placeholder: 'VIB MBB HPG' }),
+        el('p', { class: 'hint warn', id: 's-watch-err' })),
       el('details', { class: 'card', id: 's-ai-card' },
         el('summary', {}, '🤖 Cài đặt AI', el('span', { class: 'hint', id: 'ai-state' })),
         el('div', { class: 'form' },
@@ -89,27 +93,21 @@ export class Settings {
           el('label', {}, 'Khoá API'), el('div', { class: 'row tight' },
             el('input', { id: 'ai-key', type: 'password', autocomplete: 'off', spellcheck: 'false' }),
             el('button', { type: 'button', class: 'ghost', id: 'ai-show' }, '👁')),
-          el('label', {}, 'Model'), el('input', { id: 'ai-model' })),
+          el('label', {}, 'Model'), el('input', { id: 'ai-model', list: 'ai-models' }), el('datalist', { id: 'ai-models' })),
         el('p', { class: 'hint', id: 'ai-help' })),
       el('details', { class: 'card' },
         el('summary', {}, '⇪ Chép cài đặt từ app Bee.vn mini (Windows)'),
         el('p', { class: 'hint' }, 'Chọn file ', el('code', {}, '%APPDATA%\\BeeVnMini\\config.json'),
-          ' (dán đường dẫn đó vào ô chọn file) → lấy các tiêu chí + danh mục theo dõi sang đây, rồi bấm Lưu.'),
+          ' (dán đường dẫn đó vào ô chọn file) → lấy các tiêu chí + danh mục theo dõi sang đây.'),
         el('input', { type: 'file', id: 's-import', accept: '.json,application/json' })),
       el('p', { class: 'hint', id: 's-voice' }),
-      el('div', { class: 'savebar' },
-        el('span', { id: 's-dirty' }),
-        el('button', { type: 'button', class: 'ghost', id: 's-revert' }, 'Huỷ thay đổi'),
-        el('button', { type: 'button', class: 'main', id: 's-save' }, 'Lưu & áp dụng')),
     );
     Object.assign(this, {
-      tabs: $('#s-tabs'), card: $('#s-card'), watch: $('#s-watch'), voice: $('#s-voice'), dirty: $('#s-dirty'),
-      aiText: $('#ai-text'), aiGo: $('#ai-go'), aiStatus: $('#ai-status'), aiOut: $('#ai-out'),
+      tabs: $('#s-tabs'), card: $('#s-card'), watch: $('#s-watch'), watchErr: $('#s-watch-err'), voice: $('#s-voice'),
+      statusEl: $('#s-status'), aiText: $('#ai-text'), aiGo: $('#ai-go'), aiStatus: $('#ai-status'), aiOut: $('#ai-out'),
     });
-    $('#s-save').onclick = () => this.save();
-    $('#s-revert').onclick = () => { this.load(); };
     $('#s-import').onchange = (e) => this.importConfig(e.target.files[0]);
-    this.watch.oninput = () => this.markDirty();
+    this.watch.oninput = () => this.changed();
     this.aiGo.onclick = () => this.runAi();
     this.aiText.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) this.runAi(); };
     for (const id of ['ai-provider', 'ai-url', 'ai-key', 'ai-model']) {
@@ -124,7 +122,7 @@ export class Settings {
       'Máy chưa có giọng tiếng Việt cho Chrome — sẽ đọc tiếng Anh. Cài thêm: Settings → Time & language → Speech → Add voices → Tiếng Việt.';
   }
 
-  // Bản nháp từ cài đặt đang dùng
+  // Bản đang sửa (giữ cả dòng chưa có số) lấy từ cài đặt đang dùng
   load() {
     this.crits = structuredClone(this.app.cfg.criteria);
     this.cur = Math.max(0, Math.min(this.cur || 0, this.crits.length - 1));
@@ -134,7 +132,7 @@ export class Settings {
 
   loadWatch() {
     this.watch.value = this.app.cfg.watch.join(' ');
-    this.markDirty();
+    this.watchErr.textContent = '';
   }
 
   get crit() {
@@ -145,15 +143,18 @@ export class Settings {
   render() {
     this.renderTabs();
     this.renderCard();
-    this.markDirty();
   }
 
   renderTabs() {
     const n = (c) => Object.keys(c.filters || {}).length + (c.signals || []).length;
+    const pending = (c) => Object.values(c.filters || {}).some((f) => toNum(f.value) === null
+      || (f.operator === 'bt' && toNum(f.value2) === null));
     this.tabs.replaceChildren(
       ...this.crits.map((c, i) => el('button', { type: 'button', class: 'tab' + (i === this.cur ? ' on' : ''),
-        title: core.describeFilters(c.filters || {}, c.signals) || 'chưa có điều kiện',
-        onclick: () => { this.cur = i; this.render(); } }, c.name || `Tiêu chí ${i + 1}`, el('span', { class: 'badge' }, String(n(c))))),
+        title: (pending(c) ? '⚠ Có điều kiện chưa có số (chưa lọc). ' : '')
+          + (core.describeFilters(c.filters || {}, c.signals) || 'chưa có điều kiện'),
+        onclick: () => { this.cur = i; this.render(); } }, c.name || `Tiêu chí ${i + 1}`,
+        pending(c) ? el('span', { class: 'tab-warn' }, '⚠') : null, el('span', { class: 'badge' }, String(n(c))))),
       el('button', { type: 'button', class: 'tab add', onclick: () => this.addCriterion() }, '＋ Tiêu chí'),
       el('button', { type: 'button', class: 'tab add', onclick: (e) => this.showTemplates(e) }, '📋 Mẫu'),
     );
@@ -161,13 +162,13 @@ export class Settings {
 
   renderCard() {
     const c = this.crit;
-    const set = (k, v) => { c[k] = v; this.renderCard(); this.renderTabs(); this.markDirty(); };
-    const sortSel = el('select', { onchange: (e) => { c.sortColumn = e.target.value; this.markDirty(); } },
+    const set = (k, v) => { c[k] = v; this.renderCard(); this.changed(true); };
+    const sortSel = el('select', { onchange: (e) => { c.sortColumn = e.target.value; this.changed(true); } },
       SORT_COLUMNS.map(([k, t]) => el('option', { value: k }, t)));
     sortSel.value = SORT_COLUMNS.some(([k]) => k === c.sortColumn) ? c.sortColumn : 'value';
-    const name = el('input', { class: 'name', value: c.name, placeholder: 'Tên tiêu chí', maxlength: 60 });
-    name.oninput = () => { c.name = name.value; this.renderTabs(); this.markDirty(); };
-    name.onblur = () => { if (!name.value.trim()) { c.name = `Tiêu chí ${this.cur + 1}`; name.value = c.name; this.renderTabs(); } };
+    const name = el('input', { class: 'name', value: c.name, placeholder: 'Tên tiêu chí', maxlength: 60, title: 'Bấm để đổi tên' });
+    name.oninput = () => { c.name = name.value; this.changed(); };
+    name.onblur = () => { if (!name.value.trim()) { c.name = `Tiêu chí ${this.cur + 1}`; name.value = c.name; this.changed(true); } };
     this.search = el('input', { type: 'search', class: 'search', placeholder: '🔍 Tìm điều kiện để thêm: rsi, ma20, kltb, cách đỉnh, sar, mây…' });
     this.search.oninput = () => this.renderResults();
     this.results = el('div', { class: 'results' });
@@ -206,14 +207,23 @@ export class Settings {
     const f = c.filters[key];
     const op = el('select', { class: 'op' }, OPS.map(([v, t]) => el('option', { value: v }, t)));
     op.value = OPS.some(([v]) => v === f.operator) ? f.operator : 'ge';
+    // Dòng chưa có số (hoặc số sai) thì chưa dùng để lọc — hiện nhắc ngay trong dòng, các dòng khác vẫn lọc bình thường
+    const need = el('span', { class: 'need' }, '← gõ số để lọc');
+    let row;
+    const mark = () => {
+      const ok = toNum(f.value) !== null && (f.operator !== 'bt' || toNum(f.value2) !== null);
+      row.classList.toggle('pending', !ok);
+      need.hidden = ok;
+    };
     const num = (field) => {
       const inp = el('input', { class: 'num', inputmode: 'decimal', placeholder: 'số',
         value: f[field] === undefined || f[field] === null ? '' : String(f[field]) });
       inp.oninput = () => {
         const v = toNum(inp.value);
-        inp.classList.toggle('bad', v === null);
+        inp.classList.toggle('bad', inp.value.trim() !== '' && v === null);
         f[field] = v === null ? inp.value : v;
-        this.markDirty();
+        mark();
+        this.changed();
       };
       inp.classList.toggle('bad', inp.value !== '' && toNum(inp.value) === null);
       return inp;
@@ -221,12 +231,13 @@ export class Settings {
     const v1 = num('value'), v2 = num('value2');
     const to = el('span', { class: 'hint' }, 'đến');
     const toggle = () => { to.hidden = v2.hidden = op.value !== 'bt'; };
-    op.onchange = () => { f.operator = op.value; if (op.value !== 'bt') delete f.value2; toggle(); this.markDirty(); };
+    op.onchange = () => { f.operator = op.value; if (op.value !== 'bt') delete f.value2; toggle(); mark(); this.changed(true); };
     toggle();
-    const row = el('div', { class: 'cond', 'data-key': key },
-      el('span', { class: 'text' }, core.LABEL[key] ?? key), op, v1, to, v2, el('span', { class: 'unit' }, ai.unitOf(key)),
+    row = el('div', { class: 'cond', 'data-key': key },
+      el('span', { class: 'text' }, core.LABEL[key] ?? key), op, v1, to, v2, el('span', { class: 'unit' }, ai.unitOf(key)), need,
       el('button', { type: 'button', class: 'x', title: 'Bỏ điều kiện này', onclick: () => {
-        delete c.filters[key]; this.renderConds(); this.renderTabs(); this.markDirty(); } }, '✕'));
+        delete c.filters[key]; this.renderConds(); this.changed(true); } }, '✕'));
+    mark();
     row.focusValue = () => v1.focus();
     return row;
   }
@@ -266,7 +277,7 @@ export class Settings {
       el('button', { type: 'button', class: 'x', title: 'Bỏ điều kiện này', onclick: () => {
         c.signals.splice(i, 1);
         if (!c.signals.length) delete c.signals;
-        this.renderConds(); this.renderTabs(); this.markDirty();
+        this.renderConds(); this.changed(true);
       } }, '✕'));
   }
 
@@ -281,8 +292,7 @@ export class Settings {
     widget.classList.remove('bad');
     widget.title = '';
     c.signals[i] = next;
-    this.renderTabs();
-    this.markDirty();
+    this.changed();
   }
 
   renderChips() {
@@ -315,9 +325,8 @@ export class Settings {
       if (!c.signals.some((x) => JSON.stringify(x) === JSON.stringify(s))) c.signals.push(s);
     }
     this.renderConds();
-    this.renderTabs();
     this.renderResults();
-    this.markDirty();
+    this.changed(true);
     const row = kind === 'filter' ? this.condList.querySelector(`[data-key="${key}"]`)
       : [...this.condList.querySelectorAll(`[data-sig="${key}"]`)].pop();
     if (row) {
@@ -334,17 +343,26 @@ export class Settings {
     for (let i = 2; ; i++) if (!names.has(`${base} (${i})`)) return `${base} (${i})`;
   }
 
+  // Thêm tiêu chí (trống, từ mẫu hoặc từ AI) và áp dụng ngay. Tiêu chí đang xem còn trống thì thay luôn vào chỗ đó,
+  // khỏi để lại thẻ "Tiêu chí 1 · 0" vô dụng.
   addCriterion(from = null) {
     const c = this.crit;
+    const empty = !Object.keys(c.filters || {}).length && !(c.signals || []).length;
+    if (from && empty) this.crits.splice(this.cur, 1);
     const next = from ? { ...structuredClone(from), name: this.uniqueName(from.name) }
       : { name: this.uniqueName(`Tiêu chí ${this.crits.length + 1}`), exchange: c.exchange || 'HSX', filters: {} };
     next.alert ||= c.alert || 'speak';
     next.sortColumn ||= c.sortColumn || 'value';
     next.sortDirection ||= c.sortDirection || 'desc';
-    this.crits.push(next);
-    this.cur = this.crits.length - 1;
+    if (from && empty) this.crits.splice(this.cur, 0, next);
+    else {
+      this.crits.push(next);
+      this.cur = this.crits.length - 1;
+    }
     this.render();
-    if (!from) this.card.querySelector('.name').select();
+    this.changed(true);
+    if (from) this.status(`✓ Đã thêm "${next.name}" — kết quả ở bảng giá bên trái`, 'ok');
+    else this.card.querySelector('.name').select();
   }
 
   deleteCriterion() {
@@ -356,13 +374,14 @@ export class Settings {
     this.crits.splice(this.cur, 1);
     this.cur = Math.max(0, this.cur - 1);
     this.render();
+    this.changed(true);
   }
 
   showTemplates(e) {
     e.stopPropagation();
     this.closeMenu();
     const m = el('div', { class: 'menu' },
-      el('div', { class: 'menu-head' }, 'Tiêu chí mẫu — bấm để thêm, sửa tiếp được'),
+      el('div', { class: 'menu-head' }, 'Tiêu chí mẫu — bấm là lên bảng giá ngay, sửa tiếp được'),
       core.TEMPLATES.map((t) => el('button', { type: 'button', onclick: () => {
         this.closeMenu();
         const { desc, ...crit } = t;
@@ -390,15 +409,15 @@ export class Settings {
     this.app.alert([[c.name, syms.length ? syms : ['VIB', 'MBB'], c.alert || 'speak']], this.crits.length > 1);
   }
 
-  // ── Lưu ──
-  // Bản nháp đã chuẩn hoá (số là số) hoặc danh sách ô còn trống / sai
+  // ── Tự áp dụng ──
+  // Các tiêu chí đem lọc: dòng chưa có số / số sai thì bỏ ra (vẫn giữ trên màn hình để gõ tiếp); pending = số dòng đó
   collect() {
-    const bad = [];
+    let pending = 0;
     const crits = this.crits.map((c, i) => {
       const filters = {};
       for (const [k, f] of Object.entries(c.filters || {})) {
         const value = toNum(f.value), value2 = toNum(f.value2);
-        if (value === null || (f.operator === 'bt' && value2 === null)) { bad.push(`${c.name}: ${core.LABEL[k] ?? k}`); continue; }
+        if (value === null || (f.operator === 'bt' && value2 === null)) { pending++; continue; }
         filters[k] = f.operator === 'bt' ? { operator: 'bt', value, value2 } : { operator: f.operator, value };
       }
       const out = { name: String(c.name || '').trim() || `Tiêu chí ${i + 1}`, exchange: c.exchange || 'HSX', filters,
@@ -406,38 +425,35 @@ export class Settings {
       if (c.signals && c.signals.length) out.signals = c.signals;
       return out;
     });
-    if (this.host.querySelector('.conds .bad')) bad.push(`${this.crit.name}: tham số chưa hợp lệ (ô đỏ)`);
-    return { crits, bad };
+    return { crits, pending };
   }
 
-  markDirty() {
-    if (!this.crits) return;
-    const { crits } = this.collect();
-    const norm = (cs) => stable(core.criteriaFromConfig({ criteria: cs }));
-    const changed = norm(crits) !== norm(this.app.cfg.criteria)
-      || core.parseSymbols(this.watch.value).join(' ') !== this.app.cfg.watch.join(' ');
-    this.dirty.textContent = changed ? '● Có thay đổi chưa lưu' : '';
-    this.host.classList.toggle('is-dirty', changed);
+  // Có thay đổi → cập nhật thẻ, áp dụng lên bảng giá sau 0,4 s (gõ liền tay thì chỉ áp dụng 1 lần); now = áp dụng ngay
+  changed(now = false) {
+    this.renderTabs();
+    clearTimeout(this.applyTimer);
+    this.applyTimer = setTimeout(() => this.apply(), now ? 0 : 400);
   }
 
-  save() {
-    const { crits, bad } = this.collect();
-    if (bad.length) {
-      alert('Còn ô chưa điền số / sai:\n• ' + bad.join('\n• '));
-      return;
-    }
+  apply() {
+    const { crits, pending } = this.collect();
     const watch = core.parseSymbols(this.watch.value);
     const unknown = watch.filter((s) => !SYMBOL_SET.has(s));
-    if (unknown.length) {
-      alert('Không có mã: ' + unknown.join(', ') + '\nKiểm tra lại ô ★ Theo dõi.');
-      return;
-    }
-    const cur = this.cur;
-    this.app.applySettings({ criteria: crits, watch });       // app gọi lại load() → vẽ lại bản nháp mới
-    this.cur = cur;
-    this.render();
-    this.dirty.textContent = '✓ Đã lưu';
-    setTimeout(() => this.markDirty(), 1500);
+    this.watchErr.textContent = unknown.length ? `Không có mã: ${unknown.join(', ')} — các mã khác vẫn theo dõi.` : '';
+    const cfg = { criteria: crits, watch: watch.filter((s) => SYMBOL_SET.has(s)) };
+    const same = stable(core.criteriaFromConfig(cfg)) === stable(this.app.cfg.criteria)
+      && cfg.watch.join(' ') === this.app.cfg.watch.join(' ');
+    if (!same) this.app.applySettings(cfg, false);
+    if (pending) this.status(`⚠ ${pending} điều kiện chưa có số nên chưa dùng để lọc — các điều kiện khác vẫn lọc bình thường`, 'warn');
+    else if (!same) this.status('✓ Đã áp dụng lên bảng giá', 'ok');
+    else if (this.statusEl.className === 'warn') this.status('', '');
+  }
+
+  status(text, tone) {
+    clearTimeout(this.statusTimer);
+    this.statusEl.textContent = text;
+    this.statusEl.className = tone;
+    if (tone === 'ok') this.statusTimer = setTimeout(() => { this.statusEl.textContent = ''; }, 4000);
   }
 
   async importConfig(file) {
@@ -448,8 +464,8 @@ export class Settings {
       this.cur = 0;
       if (cfg.watch) this.watch.value = core.parseSymbols(cfg.watch).join(' ');
       this.render();
-      alert(`Đã chép ${this.crits.length} tiêu chí` + (cfg.watch && cfg.watch.length ? ` và ${cfg.watch.length} mã theo dõi` : '') +
-        '. Bấm "Lưu & áp dụng" để dùng.');
+      this.changed(true);
+      this.status(`✓ Đã chép ${this.crits.length} tiêu chí` + (cfg.watch && cfg.watch.length ? ` và ${cfg.watch.length} mã theo dõi` : ''), 'ok');
     } catch (e) {
       alert('Không đọc được file cài đặt: ' + e.message);
     }
@@ -458,9 +474,10 @@ export class Settings {
   // ── AI ──
   async loadAi() {
     const { ai: saved } = await chrome.storage.local.get('ai');
-    this.aiCfg = { provider: 'deepseek', key: '', model: '', url: '', ...(saved || {}) };
+    this.aiCfg = { provider: 'muse', key: '', model: '', url: '', ...(saved || {}) };
+    if (!ai.PROVIDERS[this.aiCfg.provider]) this.aiCfg.provider = 'muse';
     const $ = (id) => this.host.querySelector('#' + id);
-    $('ai-provider').value = ai.PROVIDERS[this.aiCfg.provider] ? this.aiCfg.provider : 'deepseek';
+    $('ai-provider').value = this.aiCfg.provider;
     $('ai-key').value = this.aiCfg.key;
     $('ai-model').value = this.aiCfg.model;
     $('ai-url').value = this.aiCfg.url;
@@ -469,15 +486,16 @@ export class Settings {
 
   showAiHelp() {
     const $ = (id) => this.host.querySelector('#' + id);
-    const p = ai.PROVIDERS[this.aiCfg.provider] || ai.PROVIDERS.deepseek;
+    const p = ai.PROVIDERS[this.aiCfg.provider] || ai.PROVIDERS.muse;
     const custom = this.aiCfg.provider === 'custom';
     $('ai-url').hidden = $('ai-url-l').hidden = !custom;
     $('ai-model').placeholder = p.model || 'tên model';
+    $('ai-models').replaceChildren(...p.models.map((m) => el('option', { value: m })));
     $('ai-key').placeholder = p.keyHint;
-    $('ai-help').replaceChildren(...(custom
-      ? ['Máy chủ nhận kiểu gọi /chat/completions như OpenAI (vd Muse, OpenRouter, Groq… hoặc web riêng của anh).']
-      : ['Lấy khoá ở ', el('a', { href: p.site, target: '_blank', rel: 'noreferrer' }, p.site.replace(/^https:\/\//, '')),
-        '. Khoá chỉ lưu trong Chrome máy này, chỉ gửi tới máy chủ của ', p.name, '.']));
+    const where = custom ? ['Máy chủ nhận kiểu gọi /chat/completions như OpenAI (vd OpenRouter, Groq… hoặc web riêng của anh). ']
+      : p.site ? ['Lấy khoá ở ', el('a', { href: p.site, target: '_blank', rel: 'noreferrer' }, p.site.replace(/^https:\/\//, '')), '. ']
+        : [`Dán khoá ${p.keyHint} do nơi cấp gửi; model ${p.model}. `];
+    $('ai-help').replaceChildren(...where, 'Khoá chỉ lưu trong Chrome máy này, chỉ gửi tới máy chủ AI đã chọn.');
     $('ai-state').textContent = this.aiReady() ? `  — ${p.name}` : '  — chưa có khoá';
   }
 
@@ -518,7 +536,7 @@ export class Settings {
       return;
     }
     this.aiGo.disabled = true;
-    this.aiStatus.textContent = '⏳ AI đang dựng tiêu chí…';
+    this.aiStatus.textContent = '⏳ AI đang dựng tiêu chí… (thường 20 giây – 1 phút)';
     this.aiOut.replaceChildren();
     try {
       const r = await ai.ask(this.aiCfg, text);
@@ -542,9 +560,8 @@ export class Settings {
       lines.length ? el('ul', {}, lines.map((t) => el('li', {}, t))) : el('div', { class: 'empty' }, 'AI không tạo được điều kiện nào.'),
       warn.length ? el('ul', { class: 'warn' }, warn.map((t) => el('li', {}, t))) : null,
       lines.length ? el('div', { class: 'row' },
-        el('button', { type: 'button', class: 'main', onclick: () => { this.addCriterion(c); this.aiOut.replaceChildren(); this.save(); } },
-          '＋ Thêm & áp dụng'),
-        el('button', { type: 'button', class: 'ghost', onclick: () => { this.addCriterion(c); this.aiOut.replaceChildren(); } },
-          'Thêm để sửa tiếp')) : null));
+        el('button', { type: 'button', class: 'main', onclick: () => { this.addCriterion(c); this.aiOut.replaceChildren(); } },
+          '＋ Đưa lên bảng giá'),
+        el('span', { class: 'hint' }, 'thành thẻ tiêu chí mới, sửa tiếp được')) : null));
   }
 }

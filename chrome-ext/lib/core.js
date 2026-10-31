@@ -493,6 +493,7 @@ export function formatMetric(v, fmt) {
     case 'bil': return [fixed(v, 1) + ' tỷ', ''];
     case 'num': return [fixed(v, 1), ''];             // giá trị chỉ báo (RSI, ADX, CCI…)
     case 'upct': return [fixed(v, 1) + '%', ''];      // % không dấu (cách đỉnh / đáy, độ rộng dải…)
+    case 'ratio': return [fixed(v, 0) + '%', v > 100 ? 'up' : (v < 100 ? 'down' : '')];   // % so với mức trung bình
   }
   return [String(v), ''];
 }

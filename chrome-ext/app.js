@@ -553,7 +553,8 @@ class App {
     this.applySettings({ criteria: crits });
   }
 
-  applySettings(newCfg) {
+  // reload=false: Cài đặt tự áp dụng khi đang gõ — khỏi vẽ lại phần Cài đặt (mất ô đang gõ)
+  applySettings(newCfg, reload = true) {
     Object.assign(this.cfg, newCfg);
     this.cfg.criteria = core.criteriaFromConfig(this.cfg);
     this.cfg.watch = core.parseSymbols(this.cfg.watch);
@@ -561,7 +562,7 @@ class App {
     for (const v of [this.tabView, this.pipView]) if (v) v.scroll = {};
     this.compute();
     this.render();
-    this.settings.load();
+    if (reload) this.settings.load();
     this.lastTechCheck = 0;          // vừa thêm điều kiện cần chỉ báo kỹ thuật → bắt đầu tải ngay
     this.loadTech();
     this.lastIntraTry = 0;
