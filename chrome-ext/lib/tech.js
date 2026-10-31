@@ -2,12 +2,12 @@
 // để số ra khớp từng chữ số (xem pyfloat.js). Mọi con số tính trên các phiên ĐÃ ĐÓNG (bỏ nến hôm nay).
 // Riêng khung 15 phút (intradayStats): xét nến đã chốt gần nhất, không ghép giá hiện tại.
 // Giá tính bằng nghìn đồng; khối lượng bằng cổ phiếu. Không dính giao diện, không dính mạng.
-import { fsum, fmean, imean, pyRoundTo } from './pyfloat.js';
+import { fsum, fmean, isum, imean, pyRoundTo } from './pyfloat.js';
 
 export const PRICE_AVG_N = [4, 5, 9, 10, 14, 15, 19, 20, 44, 45, 49, 50, 99, 100, 199, 200];
 export const VOL_AVG_N = [4, 5, 9, 10, 14, 19, 20, 44];
 export const EMA_N = [5, 10, 15, 20, 45, 50, 100, 200];
-export const VERSION = 7;        // cùng số với tech.VERSION của Python: đổi khi thêm số thống kê mới → bộ đệm cũ bị bỏ
+export const VERSION = 8;        // cùng số với tech.VERSION của Python: đổi khi thêm số thống kê mới → bộ đệm cũ bị bỏ
 export const PERIODS = { '1w': ['d', 7], '2w': ['d', 14], '1m': ['m', 1], '3m': ['m', 3], '6m': ['m', 6], '1y': ['m', 12] };
 export const MIN_BARS = 20;
 
@@ -27,6 +27,11 @@ export const RSI_SIGNAL_N = 14, RSI_KEEP = 30;
 export const INTRA_MIN = 15;
 export const INTRA_SESSIONS = [[9 * 60, 11 * 60 + 30], [13 * 60, 15 * 60]];
 export const INTRA_MIN_BARS = 60;     // mã ít khớp lệnh thì nến thưa, RSI 15 phút vô nghĩa → không tính
+// Chỉ báo bổ sung (xem tech.py): Parabolic SAR như ta.sar của TradingView; Stochastic chậm (14, 3, 3), Williams %R;
+// CCI (20); ADX / DMI (14) như ta.dmi; OBV + TB 20 phiên; Ichimoku (9, 26, 52), mây dời tới 25 phiên.
+export const SAR_STEP = 0.02, SAR_MAX = 0.2;
+export const STOCH_N = 14, CCI_N = 20, DMI_N = 14, OBV_N = 20;
+export const ICHI_T = 9, ICHI_K = 26, ICHI_B = 52, ICHI_SHIFT = 25;
 
 const DAY_MS = 86400000;
 const VN_MS = 7 * 3600000;
@@ -120,6 +125,112 @@ export function moneyFlow(bars, n = 14) {
   const p14 = fsum(pos.slice(-n)), n14 = fsum(neg.slice(-n));
   const mfi = n14 === 0 ? 100 : 100 - 100 / (1 + p14 / n14);
   return [p13, n13, mfi, tp[tp.length - 1]];
+}
+
+// Một phiên Parabolic SAR như ta.sar của TradingView → [SAR chưa kẹp, EP, af, chiều tăng?, vừa đảo chiều?]
+export function sarStep(sar, ep, af, up, h, lo) {
+  sar = sar + af * (ep - sar);
+  if (up && sar > lo) return [Math.max(h, ep), lo, SAR_STEP, false, true];
+  if (!up && sar < h) return [Math.min(lo, ep), h, SAR_STEP, true, true];
+  if (up && h > ep) {
+    ep = h;
+    af = Math.min(af + SAR_STEP, SAR_MAX);
+  } else if (!up && lo < ep) {
+    ep = lo;
+    af = Math.min(af + SAR_STEP, SAR_MAX);
+  }
+  return [sar, ep, af, up, false];
+}
+
+// Parabolic SAR (0.02, 0.2) tại phiên cuối → [chiều: 1 tăng / −1 giảm, SAR đã kẹp, EP, af] (xem parabolic_sar)
+export function parabolicSar(rows) {
+  if (rows.length < 3) return [null, null, null, null];
+  let up = rows[1][4] > rows[0][4];
+  let ep = up ? rows[1][2] : rows[1][3];
+  let sar = up ? rows[0][3] : rows[0][2];
+  let af = SAR_STEP;
+  for (let i = 1; i < rows.length; i++) {
+    const h = rows[i][2], lo = rows[i][3];
+    if (i === 1) {                      // phiên đầu xu hướng: chỉ xét đảo chiều, chưa dời EP
+      sar = sar + af * (ep - sar);
+      if (up && sar > lo) { sar = Math.max(h, ep); ep = lo; up = false; }
+      else if (!up && sar < h) { sar = Math.min(lo, ep); ep = h; up = true; }
+    } else {
+      [sar, ep, af, up] = sarStep(sar, ep, af, up, h, lo);
+    }
+    const prev = rows.slice(Math.max(i - 2, 0), i);
+    sar = up ? Math.min(sar, ...prev.map((r) => r[3])) : Math.max(sar, ...prev.map((r) => r[2]));
+  }
+  return [up ? 1 : -1, sar, ep, af];
+}
+
+// %K thô (n) tại phiên i; null nếu chưa đủ phiên hoặc cao nhất = thấp nhất
+export function rawK(rows, i, n = STOCH_N) {
+  if (i < n - 1) return null;
+  const win = rows.slice(i - n + 1, i + 1);
+  const hh = Math.max(...win.map((r) => r[2])), ll = Math.min(...win.map((r) => r[3]));
+  return hh > ll ? (rows[i][4] - ll) / (hh - ll) * 100 : null;
+}
+
+// CCI của dãy giá điển hình (phần tử cuối là phiên đang xét); null nếu dao động trung bình = 0
+export function cci(tps) {
+  const m = fmean(tps);
+  const md = fsum(tps.map((x) => Math.abs(x - m))) / tps.length;
+  return md ? (tps[tps.length - 1] - m) / (0.015 * md) : null;
+}
+
+// Trung bình Wilder (rma của TradingView) tại từng phần tử; các phần tử trước khi đủ n → null
+function rma(values, n) {
+  const out = new Array(values.length).fill(null);
+  if (values.length < n) return out;
+  let a = fmean(values.slice(0, n));
+  out[n - 1] = a;
+  for (let i = n; i < values.length; i++) {
+    a = (a * (n - 1) + values[i]) / n;
+    out[i] = a;
+  }
+  return out;
+}
+
+// [+DM, −DM, TR] của phiên cur so với phiên prev — mỗi phiên dạng [… , cao, thấp, đóng, …]
+export function dmTr(prev, cur) {
+  const up = cur[2] - prev[2], down = prev[3] - cur[3];
+  return [up > down && up > 0 ? up : 0, down > up && down > 0 ? down : 0,
+    Math.max(cur[2] - cur[3], Math.abs(cur[2] - prev[4]), Math.abs(cur[3] - prev[4]))];
+}
+
+export const di = (dm, atr) => (atr ? 100 * dm / atr : 0);
+
+// |+DI − −DI| / (+DI + −DI) — ADX là trung bình Wilder của số này × 100
+export function dxFrac(pdi, mdi) {
+  const s = pdi + mdi;
+  return Math.abs(pdi - mdi) / (s || 1);
+}
+
+// ADX / DMI tại phiên cuối: [RMA TR, RMA +DM, RMA −DM, RMA của dxFrac]; null nếu thiếu phiên
+export function dmiParts(rows, n = DMI_N) {
+  const parts = rows.slice(1).map((r, i) => dmTr(rows[i], r));
+  const atr = rma(parts.map((x) => x[2]), n);
+  const pdm = rma(parts.map((x) => x[0]), n);
+  const mdm = rma(parts.map((x) => x[1]), n);
+  const dx = [];
+  atr.forEach((a, i) => { if (a !== null) dx.push(dxFrac(di(pdm[i], a), di(mdm[i], a))); });
+  const adx = rma(dx, n);
+  if (!adx.length || adx[adx.length - 1] === null) return null;
+  return [atr[atr.length - 1], pdm[pdm.length - 1], mdm[mdm.length - 1], adx[adx.length - 1]];
+}
+
+// (cao nhất + thấp nhất) / 2 của n phiên tính tới phiên i — Tenkan / Kijun / Span B; null nếu chưa đủ phiên
+export function midRange(rows, i, n) {
+  if (i < n - 1) return null;
+  const win = rows.slice(i - n + 1, i + 1);
+  return (Math.max(...win.map((r) => r[2])) + Math.min(...win.map((r) => r[3]))) / 2;
+}
+
+// [Span A, Span B] tính ở phiên i — tức mây của phiên i + 25; null nếu chưa đủ phiên
+export function ichimokuLead(rows, i) {
+  const t = midRange(rows, i, ICHI_T), k = midRange(rows, i, ICHI_K), b = midRange(rows, i, ICHI_B);
+  return t === null || k === null || b === null ? null : [(t + k) / 2, b];
 }
 
 // Số phiên tăng (dương) hoặc giảm (âm) liên tục tính đến phiên cuối; đứng giá = 0.
@@ -285,6 +396,8 @@ export function statsFromBars(bars, today, dateOf, history = false) {
 
   for (const k of PRICE_AVG_N) out[`p${k}`] = n >= k ? fmean(closes.slice(-k)) : null;
   for (const k of VOL_AVG_N) out[`v${k}`] = imean(vols.slice(-k));
+  for (const k of [50, 100]) out[`v${k}`] = n >= k ? imean(vols.slice(-k)) : null;
+  out.gv20 = fmean(rows.slice(-20).map((r) => r[4] * r[5])) / 1e6;      // GTTB 20 phiên, tỷ đồng (giá nghìn đồng)
   const since3m = minusPeriod(today, 'm', 3);
   const v3m = vols.filter((_, i) => dates[i] >= since3m);
   out.v3m = v3m.length ? imean(v3m) : null;
@@ -311,6 +424,49 @@ export function statsFromBars(bars, today, dateOf, history = false) {
   [out.ag, out.al] = wilderRsiParts(closes);
   out.rs = rsiTail(closes).map((x) => pyRoundTo(x, 4));
   [out.pmf, out.nmf, out.mfi] = moneyFlow(rows);
+
+  // Parabolic SAR; Stochastic (%K thô / %K chậm 2 phiên cuối, %D phiên cuối, cao / thấp 13 phiên cuối)
+  [out.sart, out.sar, out.sep, out.saf] = parabolicSar(rows);
+  const kr = [];
+  for (let i = n - 5; i < n; i++) kr.push(rawK(rows, i));
+  const ks = [0, 1, 2].map((j) => (kr.slice(j, j + 3).some((x) => x === null) ? null : (kr[j] + kr[j + 1] + kr[j + 2]) / 3));
+  out.skr = kr.slice(-2);
+  out.sks = ks.slice(-2);
+  out.skd = ks.some((x) => x === null) ? null : (ks[0] + ks[1] + ks[2]) / 3;
+  const last13 = rows.slice(-(STOCH_N - 1));
+  out.hh13 = Math.max(...last13.map((r) => r[2]));
+  out.ll13 = Math.min(...last13.map((r) => r[3]));
+  // CCI: giá điển hình 19 phiên cuối + CCI phiên cuối
+  const tps = rows.map((r) => (r[2] + r[3] + r[4]) / 3);
+  out.tp19 = tps.slice(-(CCI_N - 1));
+  out.cci = cci(tps.slice(-CCI_N));
+  // ADX / DMI
+  [out.atr, out.pdm, out.mdm, out.dxa] = dmiParts(rows) || [null, null, null, null];
+  // OBV (cộng dồn từ phiên thứ 2) + tổng 19 / TB 20 phiên cuối
+  const obv = [];
+  let s = 0;
+  for (let i = 1; i < n; i++) {
+    const c = rows[i][4], p = rows[i - 1][4];
+    s += c > p ? rows[i][5] : (c < p ? -rows[i][5] : 0);
+    obv.push(s);
+  }
+  if (obv.length >= OBV_N) {
+    out.obv = obv[obv.length - 1];
+    out.ob19 = isum(obv.slice(-(OBV_N - 1)));
+    out.obm = isum(obv.slice(-OBV_N)) / OBV_N;
+  } else {
+    out.obv = out.ob19 = out.obm = null;
+  }
+  // Ichimoku: Tenkan / Kijun phiên cuối, cao / thấp 8 và 25 phiên cuối, mây hôm nay (ca) và hôm qua (cb)
+  out.tk = midRange(rows, n - 1, ICHI_T);
+  out.kj = midRange(rows, n - 1, ICHI_K);
+  for (const k of [ICHI_T - 1, ICHI_K - 1]) {
+    const w = rows.slice(-k);
+    out[`ih${k}`] = Math.max(...w.map((r) => r[2]));
+    out[`il${k}`] = Math.min(...w.map((r) => r[3]));
+  }
+  out.ca = ichimokuLead(rows, n - ICHI_SHIFT);
+  out.cb = ichimokuLead(rows, n - 1 - ICHI_SHIFT);
 
   for (const [key, [kind, k]] of Object.entries(PERIODS)) {
     const since = minusPeriod(today, kind, k);

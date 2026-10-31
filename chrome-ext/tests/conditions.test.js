@@ -445,7 +445,7 @@ test('danh mục cho bộ chọn điều kiện', () => {
   const cat = cond.catalog();
   assert.deepEqual(Object.keys(cat), cond.GROUPS.map(([g]) => g));
   assert.ok(Object.values(cat).every((v) => v.length));
-  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 24 + 43);
+  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 43 + 79);
   assert.deepEqual(cat.price[0], ['Thay đổi giá 1 tuần (%)', 'metric', 'change1w']);
   assert.ok(cat.ma.some((x) => x[2] === 'PriceCrossAboveSMA' && x[0] === 'Giá cắt lên SMA(…)'));
   assert.ok(cat.macd.some((x) => x[2] === 'MACDCrossAboveZeroLine' && x[0] === 'MACD cắt lên đường 0'));
@@ -454,8 +454,8 @@ test('danh mục cho bộ chọn điều kiện', () => {
   assert.equal(cond.paramText(3.5), '3.5');
 });
 
-test('danh mục đủ 43 tín hiệu', () => {
-  assert.equal(cond.SIGNAL_LIST.length, 43);
+test('danh mục đủ 79 tín hiệu', () => {
+  assert.equal(cond.SIGNAL_LIST.length, 79);
   const groups = new Set(cond.GROUPS.map(([g]) => g));
   for (const s of cond.SIGNAL_LIST) {
     assert.ok(groups.has(s.group));
@@ -552,6 +552,96 @@ test('RSI tạo đáy: tham số, mô tả và nối vào bộ lọc', () => {
   assert.deepEqual(row._live.intra, { '15m': st });
   assert.deepEqual(core.applySignals([row], m15.signals), [row]);
   assert.ok(!('intra' in core.transformQuote(q)._live));
+});
+
+// ── Chỉ báo bổ sung (chép class ChiBaoBoSung của tests/test_conditions.py) ──
+// Tăng đều: đóng cửa 1..60, cao = đóng + 0.5, thấp = đóng − 0.5, KL 1000
+const ST = statsOf(60)[0];
+const evB = (id, live, st = ST, params = {}) => cond.evalSignal(sig(id, params), st, live);
+
+test('Parabolic SAR', () => {
+  assert.equal(ST.sart, 1);
+  assert.ok(ST.sar < 59.5);
+  assert.equal(evB('SARUptrend', lv(61, { high: 61.5, low: 60.5 })), true);
+  assert.equal(evB('SARFlipDown', lv(61, { high: 61.5, low: 60.5 })), false);
+  const crash = lv(50, { high: 60, low: 49 });
+  assert.equal(evB('SARFlipDown', crash), true);
+  assert.equal(evB('SARDowntrend', crash), true);
+  assert.equal(evB('SARUptrend', crash), false);
+  assert.equal(evB('SARFlipUp', crash), false);
+  assert.deepEqual(tech.sarStep(10, 20, 0.1, true, 21, 15), [11, 21, 0.1 + 0.02, true, false]);
+  assert.deepEqual(tech.sarStep(10, 20, 0.1, true, 22, 9), [22, 9, 0.02, false, true]);
+});
+
+test('Stochastic và Williams %R', () => {
+  near(ST.skr[ST.skr.length - 1], 13.5 / 14 * 100, 5);
+  near(ST.skd, 13.5 / 14 * 100, 5);
+  assert.equal(evB('StochAboveOverBoughtLine', lv(61, { high: 61.5 }), ST, { level: 80 }), true);
+  const drop = lv(50, { high: 60, low: 50 });
+  assert.equal(evB('StochKCrossBelowD', drop), true);
+  assert.equal(evB('StochCrossBelowOverBoughtLine', drop, ST, { level: 80 }), true);
+  assert.equal(evB('WillRCrossBelowOverBoughtLine', drop, ST, { level: 20 }), true);
+  assert.equal(evB('StochKCrossAboveD', drop), false);
+  assert.equal(tech.rawK(Array(14).fill([0, 1, 5, 5, 5, 1]), 13), null);
+});
+
+test('CCI', () => {
+  near(tech.cci([1, 2, 3]), 100);
+  assert.equal(tech.cci([5, 5, 5]), null);
+  assert.equal(evB('CCIAboveOverBoughtLine', lv(70, { high: 70, low: 69 }), ST, { level: 100 }), true);
+  assert.equal(evB('CCIBelowOverSoldLine', lv(70, { high: 70, low: 69 }), ST, { level: 100 }), false);
+});
+
+test('ADX / DMI', () => {
+  assert.deepEqual(tech.dmTr([0, 0, 11, 9, 10], [0, 0, 12, 10, 11]), [1, 0, 2]);
+  assert.equal(tech.dxFrac(0, 0), 0);
+  const r = cond.dmiNow(ST, lv(61, { high: 61.5, low: 60.5 }));
+  assert.ok(r[2] > r[3]);
+  assert.ok(r[4] > 25);
+  assert.equal(evB('ADXStrongUptrend', lv(61, { high: 61.5, low: 60.5 }), ST, { level: 25 }), true);
+  assert.equal(evB('ADXAboveLevel', lv(61, { high: 61.5, low: 60.5 }), ST, { level: 25 }), true);
+  assert.equal(evB('DIPlusCrossAboveDIMinus', lv(61, { high: 61.5, low: 60.5 })), false);
+});
+
+test('OBV', () => {
+  assert.deepEqual([ST.obv, ST.ob19, ST.obm], [59000, 950000, 49500]);
+  assert.equal(evB('OBVAboveMA', lv(61, { est: 1000 })), true);
+  assert.equal(evB('OBVCrossBelowMA', lv(50, { est: 50000 })), true);
+  assert.equal(evB('OBVCrossAboveMA', lv(61, { est: 1000 })), false);
+});
+
+test('Ichimoku', () => {
+  const st = statsOf(100)[0];
+  assert.equal(tech.midRange(tech.closedBars(makeBars(100)[0], '2099-01-01', keep), 99, 9), 96);
+  assert.equal(evB('IchimokuAboveCloud', lv(101), st), true);
+  assert.equal(evB('IchimokuBelowCloud', lv(101), st), false);
+  assert.equal(evB('IchimokuBelowCloud', lv(1), st), true);
+  assert.equal(evB('IchimokuAboveCloud', lv(1)), false);
+});
+
+test('giá so với MA, EMA cắt nhau', () => {
+  assert.equal(evB('PriceAboveSMA', lv(61), ST, { period: 20 }), true);
+  assert.equal(evB('PriceBelowSMA', lv(61), ST, { period: 20 }), false);
+  assert.equal(evB('PriceBelowEMA', lv(40), ST, { period: 20 }), true);
+  assert.equal(evB('ShortSMAAboveLongSMA', lv(61), ST, { short: 5, long: 15 }), true);
+  assert.equal(evB('ShortSMAAboveLongSMA', lv(61)), false);
+  assert.equal(evB('ShortEMACrossBelowLongEMA', lv(1), ST, { short: 10, long: 20 }), true);
+  assert.equal(evB('ShortEMACrossAboveLongEMA', lv(61), ST, { short: 10, long: 20 }), false);
+  assert.deepEqual(sig('ShortEMACrossAboveLongEMA', { short: 50, long: 20 }).params, { short: 10, long: 20 });
+});
+
+test('cột số chỉ báo', () => {
+  const m = cond.indicatorMetrics(ST, lv(61, { high: 61.5, low: 60, volume: 1000 }));
+  assert.equal(m.rsi14, 100);
+  near(m.fromHigh1m, (61.5 - 61) / 61.5 * 100);
+  assert.ok(Math.abs(m.willR - (m.stochK - 100)) <= 5);
+  for (const k of ['mfi14', 'stochK', 'cci20', 'bbWidth', 'adx14', 'atrPct', 'fromLow1y']) assert.notEqual(m[k], null, k);
+  assert.ok(Object.values(cond.indicatorMetrics(null, lv(61))).every((v) => v === null));
+  assert.deepEqual([ST.v50, ST.v100], [1000, null]);
+  near(ST.gv20, 50.5 * 1000 / 1e6);
+  assert.deepEqual(core.formatMetric(12.345, 'upct'), ['12.3%', '']);
+  assert.deepEqual(core.formatMetric(-45.67, 'num'), ['-45.7', '']);
+  assert.deepEqual(core.formatMetric(3.46, 'bil'), ['3.5 tỷ', '']);
 });
 
 // ── Cột số kiểu FireAnt ─────────────────────────────────────────────────

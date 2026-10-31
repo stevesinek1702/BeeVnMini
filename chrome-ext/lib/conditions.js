@@ -7,9 +7,10 @@
 import * as tech from './tech.js';
 import { fsum } from './pyfloat.js';
 
-export const GROUPS = [['price', 'Giá'], ['volume', 'Khối lượng'], ['ma', 'Đường trung bình'],
-  ['rsi', 'RSI (14)'], ['mfi', 'MFI (14)'], ['bb', 'Bollinger Band (20)'], ['macd', 'MACD'],
-  ['pullback', 'Pullback & trendline']];
+export const GROUPS = [['price', 'Giá'], ['volume', 'Khối lượng & dòng tiền'], ['ma', 'Đường trung bình'],
+  ['rsi', 'RSI (14)'], ['mfi', 'MFI (14)'], ['stoch', 'Stochastic (14, 3, 3)'], ['osc', 'Williams %R & CCI'],
+  ['bb', 'Bollinger Band (20)'], ['macd', 'MACD'], ['adx', 'ADX / DMI (14)'], ['sar', 'Parabolic SAR'],
+  ['ichimoku', 'Ichimoku (9, 26, 52)'], ['pullback', 'Pullback & trendline']];
 
 // [khoá, nhãn đầy đủ, nhãn ngắn trên tiêu đề cột, nhóm, kiểu hiển thị]
 export const METRICS = [
@@ -18,6 +19,14 @@ export const METRICS = [
   ['change3m', 'Thay đổi giá 3 tháng (%)', '% 3 tháng', 'price', 'pct'],
   ['change6m', 'Thay đổi giá 6 tháng (%)', '% 6 tháng', 'price', 'pct'],
   ['change1y', 'Thay đổi giá 1 năm (%)', '% 1 năm', 'price', 'pct'],
+  ['fromHigh1m', 'Giá cách đỉnh 1 tháng (%)', '↓ đỉnh 1T', 'price', 'upct'],
+  ['fromHigh3m', 'Giá cách đỉnh 3 tháng (%)', '↓ đỉnh 3T', 'price', 'upct'],
+  ['fromHigh6m', 'Giá cách đỉnh 6 tháng (%)', '↓ đỉnh 6T', 'price', 'upct'],
+  ['fromHigh1y', 'Giá cách đỉnh 1 năm (%)', '↓ đỉnh 1N', 'price', 'upct'],
+  ['fromLow1m', 'Giá cách đáy 1 tháng (%)', '↑ đáy 1T', 'price', 'upct'],
+  ['fromLow3m', 'Giá cách đáy 3 tháng (%)', '↑ đáy 3T', 'price', 'upct'],
+  ['fromLow6m', 'Giá cách đáy 6 tháng (%)', '↑ đáy 6T', 'price', 'upct'],
+  ['fromLow1y', 'Giá cách đáy 1 năm (%)', '↑ đáy 1N', 'price', 'upct'],
   ['upDays', 'Số phiên tăng giá liên tục', 'Phiên tăng', 'price', 'int'],
   ['downDays', 'Số phiên giảm giá liên tục', 'Phiên giảm', 'price', 'int'],
   ['upDaysBeforeDown', 'Số phiên tăng liên tục trước khi đảo chiều giảm', 'Tăng→giảm', 'price', 'int'],
@@ -26,9 +35,20 @@ export const METRICS = [
   ['avgVol5', 'KLTB 5 phiên', 'KLTB 5', 'volume', 'vol'],
   ['avgVol10', 'KLTB 10 phiên', 'KLTB 10', 'volume', 'vol'],
   ['avgVol20', 'KLTB 20 phiên', 'KLTB 20', 'volume', 'vol'],
+  ['avgVol50', 'KLTB 50 phiên', 'KLTB 50', 'volume', 'vol'],
+  ['avgVol100', 'KLTB 100 phiên', 'KLTB 100', 'volume', 'vol'],
   ['avgVol3m', 'KLTB 3 tháng', 'KLTB 3T', 'volume', 'vol'],
+  ['avgValue20', 'GTTB 20 phiên (tỷ đồng)', 'GTTB 20', 'volume', 'bil'],
   ['foreignNetVol', 'KL nước ngoài mua ròng', 'KL NN ròng', 'volume', 'svol'],
   ['foreignNetValue', 'GT nước ngoài mua ròng (tỷ)', 'GT NN ròng', 'volume', 'sbil'],
+  ['rsi14', 'RSI(14) hiện tại', 'RSI', 'rsi', 'num'],
+  ['mfi14', 'MFI(14) hiện tại', 'MFI', 'mfi', 'num'],
+  ['stochK', 'Stochastic %K (14, 3, 3)', '%K', 'stoch', 'num'],
+  ['willR', 'Williams %R (14)', '%R', 'osc', 'num'],
+  ['cci20', 'CCI (20)', 'CCI', 'osc', 'num'],
+  ['bbWidth', 'Độ rộng dải Bollinger (20, 2) (% so với đường giữa)', 'BB rộng', 'bb', 'upct'],
+  ['adx14', 'ADX (14)', 'ADX', 'adx', 'num'],
+  ['atrPct', 'Biên độ ATR (14) so với giá (%)', 'ATR %', 'adx', 'upct'],
   ['distSMA20', 'Khoảng cách giá tới SMA20 (%)', '↕SMA20', 'pullback', 'pct'],
   ['distSMA50', 'Khoảng cách giá tới SMA50 (%)', '↕SMA50', 'pullback', 'pct'],
   ['brkTL3m', 'Vượt trendline giảm 3 tháng cách đây (phiên)', 'Vượt TL 3T', 'pullback', 'ago'],
@@ -45,15 +65,19 @@ export const METRIC_GROUP = Object.fromEntries(METRICS.map((m) => [m[0], m[3]]))
 export const METRIC_FMT = Object.fromEntries(METRICS.map((m) => [m[0], m[4]]));
 
 const TECH_PERIOD = { change1w: '1w', change1m: '1m', change3m: '3m', change6m: '6m', change1y: '1y' };
-const TECH_AVGVOL = { avgVol5: 'v5', avgVol10: 'v10', avgVol20: 'v20', avgVol3m: 'v3m' };
+const TECH_AVGVOL = { avgVol5: 'v5', avgVol10: 'v10', avgVol20: 'v20', avgVol50: 'v50', avgVol100: 'v100',
+  avgVol3m: 'v3m', avgValue20: 'gv20' };
 const TECH_DIST = { distSMA20: 20, distSMA50: 50 };
 // Phiên vượt trendline giảm gần nhất (0 = hôm nay): cần quét lùi tech.lastBreak — nặng, chỉ tính khi có tiêu chí dùng.
 export const BREAK_METRIC_KEYS = { brkTL3m: '3m', brkTL6m: '6m' };
 export const BREAK_COMPANIONS = Object.fromEntries(Object.keys(BREAK_METRIC_KEYS).map((k) => [k, [k + 'Px', k + 'Pct']]));
 export const BREAK_ALL_KEYS = {};      // cột → cột chính của nhóm
 for (const [grp, ks] of Object.entries(BREAK_COMPANIONS)) for (const k of [grp, ...ks]) BREAK_ALL_KEYS[k] = grp;
+// Cột tính từ chỉ báo + phiên hôm nay (giá / cao / thấp / KL hiện tại): indicatorMetrics
+export const INDICATOR_KEYS = ['rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct',
+  ...['High', 'Low'].flatMap((s) => ['1m', '3m', '6m', '1y'].map((p) => `from${s}${p}`))];
 export const TECH_METRIC_KEYS = [...Object.keys(TECH_PERIOD), ...Object.keys(TECH_AVGVOL), ...Object.keys(TECH_DIST),
-  ...Object.keys(BREAK_ALL_KEYS), 'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp'];
+  ...Object.keys(BREAK_ALL_KEYS), ...INDICATOR_KEYS, 'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp'];
 
 const nz = (v) => v !== null && v !== undefined;
 const truthy = (v) => nz(v) && v !== 0 && v !== '' && !Number.isNaN(v);    // bool(v) của Python cho số / chuỗi
@@ -120,6 +144,13 @@ const P_RSI_DOWN = P('level', 'ngưỡng quá bán', [10, 15, 20, 25, 30, 35, 40
 export const TF_NAME = { '15m': '15 phút', D: 'ngày' };
 const P_TF = P('tf', 'khung', Object.keys(TF_NAME), '15m');
 const P_RSI_LOOK = P('look', 'đáy trong (nến)', [8, 12, 16, 20, 24, tech.RSI_KEEP], 16);
+const P_MA_STATE = P('period', 'kỳ (phiên)', MA_PERIODS, 20);
+const P_STO_UP = P('level', 'ngưỡng quá mua', [70, 75, 80, 85, 90], 80, true, 0, 100);
+const P_STO_DOWN = P('level', 'ngưỡng quá bán', [10, 15, 20, 25, 30], 20, true, 0, 100);
+const P_WR_DOWN = P('level', 'ngưỡng quá bán (−)', [70, 80, 90], 80, true, 0, 100);
+const P_WR_UP = P('level', 'ngưỡng quá mua (−)', [10, 20, 30], 20, true, 0, 100);
+const P_CCI = P('level', 'ngưỡng (±)', [100, 150, 200], 100, true, 0, 500);
+const P_ADX = P('level', 'ADX tối thiểu', [20, 25, 30, 40], 25, true, 0, 100);
 const P_MFI_UP = P('level', 'ngưỡng quá mua', [70, 75, 80, 85, 90], 80, true, 0, 100);
 const P_MFI_DOWN = P('level', 'ngưỡng quá bán', [10, 15, 20, 25, 30], 20, true, 0, 100);
 const P_BB = P('std', 'độ lệch chuẩn', [2, 3.5], 2, true, 0.5, 6);
@@ -354,6 +385,196 @@ const retestDownLine = (bounce) => (st, lv, p) => {
   return touched;
 };
 
+// --- Chỉ báo bổ sung (tech.js): mọi số ghép phiên hôm nay = giá / cao / thấp hiện tại ---
+// [cao nhất, thấp nhất] của phiên hôm nay tính cả giá hiện tại; quote thiếu cao / thấp thì lấy giá hiện tại
+function hl(lv) {
+  const last = lv.last;
+  return [Math.max(lv.high || last, last), Math.min(lv.low || last, last)];
+}
+
+export function emaLive(st, last, n) {
+  const e = st[`e${n}`];
+  return truthy(e) ? (2 * last + (n - 1) * e) / (n + 1) : null;
+}
+
+const priceVsMa = (kind, above) => (st, lv, p) => {
+  const line = (kind === 'sma' ? smaLive : emaLive)(st, lv.last, p.period);
+  return truthy(line) && (above ? lv.last > line : lv.last < line);
+};
+
+function smaAbove(st, lv, p) {
+  const s = smaLive(st, lv.last, p.short), l = smaLive(st, lv.last, p.long);
+  return truthy(s) && truthy(l) && s > l;
+}
+
+const emaPair = (up) => (st, lv, p) => {
+  const es = st[`e${p.short}`], el = st[`e${p.long}`];
+  const s = emaLive(st, lv.last, p.short), l = emaLive(st, lv.last, p.long);
+  if (!(truthy(es) && truthy(el) && truthy(s) && truthy(l))) return false;
+  return up ? (es <= el && s > l) : (es >= el && s < l);
+};
+
+// Parabolic SAR: phiên hôm nay (giá cao / thấp hiện tại) đi qua SAR là đảo chiều (tech.sarStep)
+const sar = (kind) => (st, lv) => {
+  if (['sart', 'sar', 'sep', 'saf'].some((k) => !nz(st[k]))) return false;
+  const [hi, lo] = hl(lv);
+  const [, , , up, flip] = tech.sarStep(st.sar, st.sep, st.saf, st.sart === 1, hi, lo);
+  if (kind === 'flip_up') return flip && up;
+  if (kind === 'flip_down') return flip && !up;
+  return kind === 'up' ? up : !up;
+};
+
+// %K thô (14) tính cả phiên hôm nay; null nếu thiếu số / cao nhất = thấp nhất
+export function rawKNow(st, lv) {
+  let hh = st.hh13, ll = st.ll13;
+  if (!nz(hh) || !nz(ll)) return null;
+  const [hi, lo] = hl(lv);
+  hh = Math.max(hh, hi);
+  ll = Math.min(ll, lo);
+  return hh > ll ? (lv.last - ll) / (hh - ll) * 100 : null;
+}
+
+// [%K, %D phiên đóng gần nhất, %K, %D tính cả phiên hôm nay] — Stochastic chậm 14, 3, 3; null nếu thiếu số
+export function stochNow(st, lv) {
+  const kr = st.skr, ks = st.sks, d = st.skd;
+  const raw = rawKNow(st, lv);
+  if (raw === null || !nz(d) || !kr || !ks || kr.some((x) => !nz(x)) || ks.some((x) => !nz(x))) return null;
+  const k = (kr[0] + kr[1] + raw) / 3;
+  return [ks[1], d, k, (ks[0] + ks[1] + k) / 3];
+}
+
+const stoch = (kind) => (st, lv, p) => {
+  const r = stochNow(st, lv);
+  if (r === null) return false;
+  const [k0, d0, k1, d1] = r;
+  if (kind === 'cross_up') return k0 <= d0 && k1 > d1;
+  if (kind === 'cross_down') return k0 >= d0 && k1 < d1;
+  const a = p.level;
+  if (kind === 'cross_up_os') return k0 <= d0 && k1 > d1 && k0 <= a;
+  if (kind === 'exit_os') return k0 <= a && a < k1;
+  if (kind === 'exit_ob') return k0 >= a && a > k1;
+  return kind === 'below' ? k1 < a : k1 > a;
+};
+
+// Williams %R (14) = %K thô − 100. Thoát quá bán: cắt lên −level; thoát quá mua: cắt xuống −level
+const willr = (kind) => (st, lv, p) => {
+  const kr = st.skr, raw = rawKNow(st, lv);
+  if (raw === null || !kr || !nz(kr[kr.length - 1])) return false;
+  const w0 = kr[kr.length - 1] - 100, w1 = raw - 100, a = -p.level;
+  return kind === 'exit_os' ? (w0 <= a && a < w1) : (w0 >= a && a > w1);
+};
+
+// [CCI(20) phiên đóng gần nhất, CCI tính cả phiên hôm nay]; null nếu thiếu số
+export function cciNow(st, lv) {
+  const tps = st.tp19, prev = st.cci;
+  if (!tps || tps.length < tech.CCI_N - 1 || !nz(prev)) return null;
+  const [hi, lo] = hl(lv);
+  const cur = tech.cci([...tps, (hi + lo + lv.last) / 3]);
+  return cur === null ? null : [prev, cur];
+}
+
+const cciSig = (kind) => (st, lv, p) => {
+  const r = cciNow(st, lv);
+  if (r === null) return false;
+  const [c0, c1] = r, a = p.level;
+  if (kind === 'exit_os') return c0 <= -a && -a < c1;
+  if (kind === 'exit_ob') return c0 >= a && a > c1;
+  return kind === 'above' ? c1 > a : c1 < -a;
+};
+
+// [+DI, −DI phiên đóng gần nhất, +DI, −DI, ADX, ATR tính cả phiên hôm nay]; null nếu thiếu số
+export function dmiNow(st, lv) {
+  if (['atr', 'pdm', 'mdm', 'dxa', 'lh', 'll', 'lc'].some((k) => !nz(st[k]))) return null;
+  const [hi, lo] = hl(lv);
+  const n = tech.DMI_N;
+  const [p, m, tr] = tech.dmTr([null, null, st.lh, st.ll, st.lc], [null, null, hi, lo, lv.last]);
+  const atr = (st.atr * (n - 1) + tr) / n;
+  const pdm = (st.pdm * (n - 1) + p) / n;
+  const mdm = (st.mdm * (n - 1) + m) / n;
+  const pd1 = tech.di(pdm, atr), md1 = tech.di(mdm, atr);
+  const adx = 100 * (st.dxa * (n - 1) + tech.dxFrac(pd1, md1)) / n;
+  return [tech.di(st.pdm, st.atr), tech.di(st.mdm, st.atr), pd1, md1, adx, atr];
+}
+
+const dmi = (kind) => (st, lv, p) => {
+  const r = dmiNow(st, lv);
+  if (r === null) return false;
+  const [pd0, md0, pd1, md1, adx] = r;
+  if (kind === 'cross_up') return pd0 <= md0 && pd1 > md1;
+  if (kind === 'cross_down') return pd0 >= md0 && pd1 < md1;
+  if (kind === 'adx') return adx > p.level;
+  return pd1 > md1 && adx > p.level;            // xu hướng tăng mạnh
+};
+
+// [OBV, TB 20 của OBV ở phiên đóng gần nhất, OBV, TB 20 tính cả hôm nay]; KL hôm nay = KL dự kiến cả phiên
+export function obvNow(st, lv) {
+  const obv = st.obv, s19 = st.ob19, m = st.obm, lc = st.lc;
+  if (![obv, s19, m, lc].every(nz)) return null;
+  const vol = lv.est || lv.volume || 0, last = lv.last;
+  const cur = obv + (last > lc ? vol : (last < lc ? -vol : 0));
+  return [obv, m, cur, (s19 + cur) / tech.OBV_N];
+}
+
+const obvSig = (kind) => (st, lv) => {
+  const r = obvNow(st, lv);
+  if (r === null) return false;
+  const [o0, m0, o1, m1] = r;
+  if (kind === 'cross_up') return o0 <= m0 && o1 > m1;
+  if (kind === 'cross_down') return o0 >= m0 && o1 < m1;
+  return o1 > m1;
+};
+
+// Mây hôm nay = Span A / B tính 25 phiên trước (st.ca), mây hôm qua st.cb; Tenkan / Kijun ghép phiên hôm nay
+const ichimoku = (kind) => (st, lv) => {
+  if (['tk', 'kj', 'ih8', 'il8', 'ih25', 'il25', 'ca', 'cb', 'lc'].some((k) => !nz(st[k]))) return false;
+  const last = lv.last, ca = st.ca, cb = st.cb;
+  if (kind === 'above') return last > Math.max(...ca);
+  if (kind === 'below') return last < Math.min(...ca);
+  if (kind === 'break_up') return st.lc <= Math.max(...cb) && last > Math.max(...ca);
+  const [hi, lo] = hl(lv);
+  const tk = (Math.max(st.ih8, hi) + Math.min(st.il8, lo)) / 2;
+  const kj = (Math.max(st.ih25, hi) + Math.min(st.il25, lo)) / 2;
+  return kind === 'tk_up' ? (st.tk <= st.kj && tk > kj) : (st.tk >= st.kj && tk < kj);
+};
+
+// Các cột số tính từ chỉ báo + phiên hôm nay (INDICATOR_KEYS) — xem indicator_metrics của conditions.py
+export function indicatorMetrics(st, lv) {
+  const out = Object.fromEntries(INDICATOR_KEYS.map((k) => [k, null]));
+  if (!valid(st, lv)) return out;
+  const last = lv.last;
+  out.rsi14 = rsiNow(st, last)[1];
+  out.mfi14 = mfiNow(st, lv)[1];
+  const s = stochNow(st, lv);
+  out.stochK = s ? s[2] : null;
+  const raw = rawKNow(st, lv);
+  out.willR = raw === null ? null : raw - 100;
+  const c = cciNow(st, lv);
+  out.cci20 = c ? c[1] : null;
+  const b = bbNow(st, last, 2);
+  if (b) {
+    const mid = (st.p19 * 19 + last) / 20;
+    out.bbWidth = mid ? (b[1][0] - b[1][1]) / mid * 100 : null;
+  }
+  const d = dmiNow(st, lv);
+  if (d) {
+    out.adx14 = d[4];
+    out.atrPct = d[5] / last * 100;
+  }
+  const [hi, lo] = hl(lv);
+  for (const per of ['1m', '3m', '6m', '1y']) {
+    let h = st['hi' + per], l = st['lo' + per];
+    if (truthy(h)) {
+      h = Math.max(h, hi);
+      out['fromHigh' + per] = (h - last) / h * 100;
+    }
+    if (truthy(l)) {
+      l = Math.min(l, lo);
+      out['fromLow' + per] = l > 0 ? (last - l) / l * 100 : null;
+    }
+  }
+  return out;
+}
+
 const S = (id, group, label, params, fn) => ({ id, group, label, params, fn });
 
 export const SIGNAL_LIST = [
@@ -362,6 +583,9 @@ export const SIGNAL_LIST = [
   S('EstimatedVolumeSurge', 'volume', 'KL dự kiến vượt TB {period} phiên tối thiểu {pct}%',
     [P('period', 'TB (phiên)', MA_PERIODS, 5), P('pct', 'vượt tối thiểu (%)', [10, 20, 30, 50, 70, 100, 150, 200, 300], 50, true, 1, 1000)],
     estVolumeSurge),
+  S('OBVCrossAboveMA', 'volume', 'OBV cắt lên đường TB 20 phiên của OBV', [], obvSig('cross_up')),
+  S('OBVCrossBelowMA', 'volume', 'OBV cắt xuống đường TB 20 phiên của OBV', [], obvSig('cross_down')),
+  S('OBVAboveMA', 'volume', 'OBV đang trên đường TB 20 phiên (dòng tiền vào)', [], obvSig('above')),
   S('PriceCrossAboveSMA', 'ma', 'Giá cắt lên SMA({period})', [P_MA], smaCross(true)),
   S('PriceCrossBelowSMA', 'ma', 'Giá cắt xuống SMA({period})', [P_MA], smaCross(false)),
   S('PriceCrossAboveEMA', 'ma', 'Giá cắt lên EMA({period})', [P_MA], emaCross(true)),
@@ -370,6 +594,16 @@ export const SIGNAL_LIST = [
     [P('short', 'SMA ngắn', [5, 10, 15, 20, 50], 5), P('long', 'cắt lên SMA dài', [15, 20, 45, 50, 100, 200], 15)], smaPair(true)),
   S('ShortSMACrossBelowLongSMA', 'ma', 'SMA({short}) cắt xuống SMA({long})',
     [P('short', 'SMA ngắn', [5, 10, 15, 20, 50], 5), P('long', 'cắt xuống SMA dài', [15, 20, 45, 50, 100, 200], 15)], smaPair(false)),
+  S('PriceAboveSMA', 'ma', 'Giá đang trên SMA({period})', [P_MA_STATE], priceVsMa('sma', true)),
+  S('PriceBelowSMA', 'ma', 'Giá đang dưới SMA({period})', [P_MA_STATE], priceVsMa('sma', false)),
+  S('PriceAboveEMA', 'ma', 'Giá đang trên EMA({period})', [P_MA_STATE], priceVsMa('ema', true)),
+  S('PriceBelowEMA', 'ma', 'Giá đang dưới EMA({period})', [P_MA_STATE], priceVsMa('ema', false)),
+  S('ShortSMAAboveLongSMA', 'ma', 'SMA({short}) đang trên SMA({long})',
+    [P('short', 'SMA ngắn', [5, 10, 15, 20, 50], 50), P('long', 'trên SMA dài', [15, 20, 45, 50, 100, 200], 200)], smaAbove),
+  S('ShortEMACrossAboveLongEMA', 'ma', 'EMA({short}) cắt lên EMA({long})',
+    [P('short', 'EMA ngắn', [5, 10, 15, 20, 50], 10), P('long', 'cắt lên EMA dài', [15, 20, 45, 50, 100, 200], 20)], emaPair(true)),
+  S('ShortEMACrossBelowLongEMA', 'ma', 'EMA({short}) cắt xuống EMA({long})',
+    [P('short', 'EMA ngắn', [5, 10, 15, 20, 50], 10), P('long', 'cắt xuống EMA dài', [15, 20, 45, 50, 100, 200], 20)], emaPair(false)),
   S('RSICrossAboveOverBoughtLine', 'rsi', 'RSI(14) đi vào vùng quá mua (trên {level})', [P_RSI_UP], rsi('cross_up')),
   S('RSICrossBelowOverBoughtLine', 'rsi', 'RSI(14) thoát khỏi vùng quá mua (trên {level})', [P_RSI_UP], rsi('cross_down')),
   S('RSIAboveOverBoughtLine', 'rsi', 'RSI(14) đang trong vùng quá mua (trên {level})', [P_RSI_UP], rsi('above')),
@@ -384,6 +618,20 @@ export const SIGNAL_LIST = [
   S('MFICrossBelowOverSoldLine', 'mfi', 'MFI(14) đi vào vùng quá bán (dưới {level})', [P_MFI_DOWN], mfi('cross_down')),
   S('MFICrossAboveOverSoldLine', 'mfi', 'MFI(14) thoát khỏi vùng quá bán (dưới {level})', [P_MFI_DOWN], mfi('cross_up')),
   S('MFIBelowOverSoldLine', 'mfi', 'MFI(14) đang trong vùng quá bán (dưới {level})', [P_MFI_DOWN], mfi('below')),
+  S('StochKCrossAboveD', 'stoch', 'Stochastic: %K cắt lên %D', [], stoch('cross_up')),
+  S('StochKCrossBelowD', 'stoch', 'Stochastic: %K cắt xuống %D', [], stoch('cross_down')),
+  S('StochKCrossAboveDOverSold', 'stoch', 'Stochastic: %K cắt lên %D từ vùng quá bán (dưới {level})', [P_STO_DOWN],
+    stoch('cross_up_os')),
+  S('StochCrossAboveOverSoldLine', 'stoch', 'Stochastic thoát khỏi vùng quá bán (dưới {level})', [P_STO_DOWN], stoch('exit_os')),
+  S('StochCrossBelowOverBoughtLine', 'stoch', 'Stochastic thoát khỏi vùng quá mua (trên {level})', [P_STO_UP], stoch('exit_ob')),
+  S('StochBelowOverSoldLine', 'stoch', 'Stochastic đang trong vùng quá bán (dưới {level})', [P_STO_DOWN], stoch('below')),
+  S('StochAboveOverBoughtLine', 'stoch', 'Stochastic đang trong vùng quá mua (trên {level})', [P_STO_UP], stoch('above')),
+  S('WillRCrossAboveOverSoldLine', 'osc', 'Williams %R thoát vùng quá bán (cắt lên −{level})', [P_WR_DOWN], willr('exit_os')),
+  S('WillRCrossBelowOverBoughtLine', 'osc', 'Williams %R thoát vùng quá mua (cắt xuống −{level})', [P_WR_UP], willr('exit_ob')),
+  S('CCICrossAboveOverSoldLine', 'osc', 'CCI(20) thoát vùng quá bán (cắt lên −{level})', [P_CCI], cciSig('exit_os')),
+  S('CCICrossBelowOverBoughtLine', 'osc', 'CCI(20) thoát vùng quá mua (cắt xuống +{level})', [P_CCI], cciSig('exit_ob')),
+  S('CCIAboveOverBoughtLine', 'osc', 'CCI(20) đang trên +{level}', [P_CCI], cciSig('above')),
+  S('CCIBelowOverSoldLine', 'osc', 'CCI(20) đang dưới −{level}', [P_CCI], cciSig('below')),
   S('PriceCrossAboveBollingerBands', 'bb', 'Giá thoát ra ngoài biên trên Bollinger (20, {std})', [P_BB], bb('cross_above')),
   S('PriceCrossFromAboveBollingerBands', 'bb', 'Giá cắt xuống từ ngoài biên trên Bollinger (20, {std})', [P_BB], bb('back_from_above')),
   S('PriceAboveBollingerBands', 'bb', 'Giá đang ở ngoài biên trên Bollinger (20, {std})', [P_BB], bb('above')),
@@ -398,6 +646,19 @@ export const SIGNAL_LIST = [
   S('MACDAboveZeroLine', 'macd', 'MACD đang ở trên đường 0', [], macd('above_zero')),
   S('MACDCrossBelowZeroLine', 'macd', 'MACD cắt xuống đường 0', [], macd('cross_below_zero')),
   S('MACDBelowZeroLine', 'macd', 'MACD đang ở dưới đường 0', [], macd('below_zero')),
+  S('ADXAboveLevel', 'adx', 'ADX(14) trên {level} (có xu hướng mạnh)', [P_ADX], dmi('adx')),
+  S('DIPlusCrossAboveDIMinus', 'adx', '+DI cắt lên −DI', [], dmi('cross_up')),
+  S('DIPlusCrossBelowDIMinus', 'adx', '+DI cắt xuống −DI', [], dmi('cross_down')),
+  S('ADXStrongUptrend', 'adx', 'Xu hướng tăng mạnh: +DI trên −DI, ADX trên {level}', [P_ADX], dmi('strong_up')),
+  S('SARFlipUp', 'sar', 'Parabolic SAR đảo chiều tăng (giá vượt lên SAR)', [], sar('flip_up')),
+  S('SARFlipDown', 'sar', 'Parabolic SAR đảo chiều giảm (giá thủng SAR)', [], sar('flip_down')),
+  S('SARUptrend', 'sar', 'Parabolic SAR đang báo xu hướng tăng (SAR dưới giá)', [], sar('up')),
+  S('SARDowntrend', 'sar', 'Parabolic SAR đang báo xu hướng giảm (SAR trên giá)', [], sar('down')),
+  S('IchimokuAboveCloud', 'ichimoku', 'Giá đang trên mây Ichimoku', [], ichimoku('above')),
+  S('IchimokuBelowCloud', 'ichimoku', 'Giá đang dưới mây Ichimoku', [], ichimoku('below')),
+  S('IchimokuBreakAboveCloud', 'ichimoku', 'Giá vượt lên trên mây Ichimoku', [], ichimoku('break_up')),
+  S('IchimokuTenkanCrossAboveKijun', 'ichimoku', 'Tenkan cắt lên Kijun', [], ichimoku('tk_up')),
+  S('IchimokuTenkanCrossBelowKijun', 'ichimoku', 'Tenkan cắt xuống Kijun', [], ichimoku('tk_down')),
   S('PullbackToSMA', 'pullback', 'Pullback về SMA({period}), vùng ±{tol}%, KL cạn: {dry}',
     [P_PB_MA, P_PB_TOL, P_PB_DRY], pullback('sma', false)),
   S('PullbackBounceSMA', 'pullback', 'Bật lên từ SMA({period}), vùng ±{tol}%, KL cạn: {dry}',
@@ -448,9 +709,8 @@ export function normalizeSignal(raw) {
     }
     params[p.id] = ok ? v : p.default;
   }
-  if ((raw.id === 'ShortSMACrossAboveLongSMA' || raw.id === 'ShortSMACrossBelowLongSMA') && params.short >= params.long) {
-    params.short = 5;
-    params.long = 15;
+  if ('short' in params && 'long' in params && params.short >= params.long) {
+    [params.short, params.long] = sig.params.map((p) => p.default);     // đường ngắn phải ngắn hơn đường dài
   }
   return { id: sig.id, params };
 }

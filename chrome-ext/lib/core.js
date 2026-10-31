@@ -128,6 +128,7 @@ export function transformQuote(q, hist = null, techStats = null, nowMs = Date.no
   Object.assign(row, conditions.techMetrics(st, price, change, est));
   row._tech = st;
   row._live = { last: price, high: k(q.PriceHigh), low: k(q.PriceLow), volume: vol, est };
+  Object.assign(row, conditions.indicatorMetrics(st, row._live));
   if (intra) row._live.intra = intra;
   return row;
 }
@@ -300,6 +301,38 @@ export function alertText(symbols, limit = 5) {
 
 export const ALERT_MODES = ['speak', 'beep', 'off'];
 
+// Tiêu chí mẫu (Cài đặt → 📋 Mẫu): bấm là thêm thành tiêu chí mới, sửa tiếp được. GTTB 20 phiên lọc mã đủ thanh khoản.
+const liq = (bil) => ({ avgValue20: { operator: 'ge', value: bil } });
+const S = (id, params = {}) => conditions.normalizeSignal({ id, params });
+export const TEMPLATES = [
+  { name: 'Cổ phiếu khoẻ, sát đỉnh', desc: 'Giá trên MA50, MA50 trên MA200, cách đỉnh 1 năm ≤ 10%, GTTB ≥ 10 tỷ',
+    exchange: 'ALL', filters: { ...liq(10), fromHigh1y: { operator: 'le', value: 10 } },
+    signals: [S('PriceAboveSMA', { period: 50 }), S('ShortSMAAboveLongSMA', { short: 50, long: 200 })] },
+  { name: 'Pullback về MA20', desc: 'Xu hướng tăng, điều chỉnh về chạm SMA20 (±2%), KL cạn dần, GTTB ≥ 5 tỷ',
+    exchange: 'ALL', filters: liq(5), signals: [S('PullbackToSMA', { period: 20 })] },
+  { name: 'Vượt đỉnh 3 tháng + KL lớn', desc: 'Giá vượt đỉnh 3 tháng, KL dự kiến vượt TB 20 phiên ≥ 50%, GTTB ≥ 3 tỷ',
+    exchange: 'ALL', filters: liq(3),
+    signals: [S('AbovePreviousHigh', { period: '3m' }), S('EstimatedVolumeSurge', { period: 20, pct: 50 })] },
+  { name: 'RSI tạo đáy 15 phút', desc: 'RSI 15 phút vừa thoát vùng 30, trên Signal, giá trên MA10 — GTTB ≥ 10 tỷ',
+    exchange: 'ALL', filters: liq(10), signals: [S('RSIBottom', { tf: '15m' })] },
+  { name: 'Bắt đáy quá bán', desc: 'RSI(14) ≤ 35, Stochastic %K cắt lên %D từ vùng dưới 20, GTTB ≥ 5 tỷ',
+    exchange: 'ALL', filters: { ...liq(5), rsi14: { operator: 'le', value: 35 } },
+    signals: [S('StochKCrossAboveDOverSold', { level: 20 })] },
+  { name: 'Xu hướng tăng mạnh', desc: '+DI trên −DI và ADX > 25, Parabolic SAR báo tăng, giá trên mây Ichimoku, GTTB ≥ 5 tỷ',
+    exchange: 'ALL', filters: liq(5),
+    signals: [S('ADXStrongUptrend', { level: 25 }), S('SARUptrend'), S('IchimokuAboveCloud')] },
+  { name: 'Nền chặt sát đỉnh', desc: 'Dải Bollinger hẹp (≤ 10%), cách đỉnh 3 tháng ≤ 15%, giá trên MA50, GTTB ≥ 3 tỷ',
+    exchange: 'ALL', filters: { ...liq(3), bbWidth: { operator: 'le', value: 10 }, fromHigh3m: { operator: 'le', value: 15 } },
+    signals: [S('PriceAboveSMA', { period: 50 })] },
+  { name: 'Vượt trendline giảm', desc: 'Hôm nay vượt trendline giảm 6 tháng ≥ 1%, KL dự kiến ≥ KLTB 20, GTTB ≥ 3 tỷ',
+    exchange: 'ALL', filters: liq(3), signals: [S('BreakDownTrendline', { period: '6m' })] },
+  { name: 'Dòng tiền vào', desc: 'OBV cắt lên TB 20 phiên, MFI ≥ 50, giá trên MA20, GTTB ≥ 5 tỷ',
+    exchange: 'ALL', filters: { ...liq(5), mfi14: { operator: 'ge', value: 50 } },
+    signals: [S('OBVCrossAboveMA'), S('PriceAboveSMA', { period: 20 })] },
+  { name: 'Khối ngoại mua ròng', desc: 'Nước ngoài mua ròng ≥ 10 tỷ hôm nay, giá đang tăng',
+    exchange: 'ALL', filters: { foreignNetValue: { operator: 'ge', value: 10 }, changePercent: { operator: 'gt', value: 0 } } },
+];
+
 const isObj = (c) => c && typeof c === 'object' && !Array.isArray(c);
 
 // Danh sách tiêu chí lọc. Cài đặt cũ (1 bộ lọc ở exchange/filters) tự thành "Tiêu chí 1".
@@ -457,6 +490,9 @@ export function formatMetric(v, fmt) {
     case 'vol': return [formatVolume(v), ''];
     case 'svol': return [(v > 0 ? '+' : v < 0 ? '-' : '') + formatVolume(Math.abs(v)), tone];
     case 'sbil': return [(v > 0 ? '+' : '') + fixed(v, 1) + ' tỷ', tone];
+    case 'bil': return [fixed(v, 1) + ' tỷ', ''];
+    case 'num': return [fixed(v, 1), ''];             // giá trị chỉ báo (RSI, ADX, CCI…)
+    case 'upct': return [fixed(v, 1) + '%', ''];      // % không dấu (cách đỉnh / đáy, độ rộng dải…)
   }
   return [String(v), ''];
 }
