@@ -1,13 +1,11 @@
 // Lấy dữ liệu: giá FireAnt (cần host_permissions — FireAnt không mở CORS), nến ngày VNDirect (máy chủ trả
 // Access-Control-Allow-Origin: * nên gọi thẳng được, khỏi khai báo quyền → không hiện trong mục Site access).
 import { histStats } from './lib/core.js';
-import { intradayCutoff, intradayStats } from './lib/tech.js';
+import { INTRA_FEED_DAYS, INTRA_TFS, intradayCutoff, intradayStats } from './lib/tech.js';
 
 export const QUOTES_URL = 'https://www.fireant.vn/api/Data/Markets/Quotes?symbols=';
 export const HISTORY_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=D';
-export const INTRA_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=15';
-// Nến 15 phút: 21 ngày ≈ 15 phiên ≈ 240 nến với mã thanh khoản tốt — đủ để RSI Wilder 'quên' giá mồi đầu chuỗi
-const INTRA_DAYS = 21;
+export const INTRA_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=';     // + 15 / 60 (phút)
 // FireAnt cắt bớt kết quả khi hỏi quá nhiều mã một lần (400 mã chỉ về ~60%) → 100 mã/lượt.
 const QUOTE_BATCH = 100, QUOTE_WORKERS = 4, HIST_WORKERS = 8;
 // Chỉ giữ các trường bảng giá cần (cho nhẹ bộ nhớ)
@@ -84,17 +82,21 @@ export async function fetchAllHistory(symbols, today, done, onProgress) {
   return done;
 }
 
-// Thống kê nến 15 phút (đã chốt tới lúc nowMs) cho các mã còn thiếu (~30 s cả thị trường).
-// Mã ít nến → {}; lỗi mạng → bỏ trống, lần sau thử lại.
-export async function fetchAllIntraday(symbols, nowMs, done, onProgress) {
+// {mã: {khung: thống kê}} nến trong phiên cho các mã còn thiếu (~40 s cả thị trường): tải nến `feed` phút (15 / 60) rồi
+// tính các khung `tfs` gộp từ loại nến đó, mỗi khung chỉ lấy nến đã chốt tới lúc nowMs. Mã ít nến → khung đó null;
+// lỗi mạng → bỏ trống, lần sau thử lại. Xem fetch_all_intraday của core.py.
+export async function fetchAllIntraday(symbols, nowMs, feed, tfs, done, onProgress) {
   done = { ...(done || {}) };
   const todo = symbols.filter((s) => !(s in done));
-  const to = Math.floor(nowMs / 1000), cut = intradayCutoff(nowMs);
+  const to = Math.floor(nowMs / 1000);
+  const cuts = tfs.map((tf) => [tf, INTRA_TFS[tf][1], intradayCutoff(nowMs, INTRA_TFS[tf][1])]);
   let i = 0;
   const one = async (sym) => {
     try {
-      const bars = await getJson(`${INTRA_URL}&symbol=${sym}&from=${to - INTRA_DAYS * 86400}&to=${to}`, '*/*', 30000);
-      done[sym] = intradayStats(bars, cut) || {};
+      const bars = await getJson(`${INTRA_URL}${feed}&symbol=${sym}&from=${to - INTRA_FEED_DAYS[feed] * 86400}&to=${to}`,
+        '*/*', 30000);
+      done[sym] = Object.fromEntries(cuts.map(([tf, minutes, cut]) =>
+        [tf, intradayStats(bars, cut, minutes !== feed ? minutes : null)]));
     } catch { /* lỗi mạng: thử lại 1 lượt ngay, còn lỗi thì để lần sau */ }
     if (++i % 50 === 0 && onProgress) onProgress(Object.keys(done).length / symbols.length);
   };

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Bee Mini – Bảng giá chứng khoán nổi & lọc cổ phiếu",
   "short_name": "Bee Mini",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Bảng giá chứng khoán VN luôn nổi trên mọi cửa sổ. Lọc cổ phiếu bằng AI hoặc theo RSI, MACD, trendline; đọc mã mới bằng giọng Việt.",
   "minimum_chrome_version": "120",
   "permissions": ["alarms", "tts", "storage", "unlimitedStorage"],

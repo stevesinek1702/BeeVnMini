@@ -187,6 +187,7 @@ export class Settings {
       el('h3', {}, 'Điều kiện ', el('span', { class: 'hint' }, '— sửa số / tham số ngay trong dòng, ✕ để bỏ')),
       this.condList = el('div', { class: 'conds' }),
       el('div', { class: 'picker' }, this.search, this.chips, this.results),
+      el('p', { class: 'hint' }, 'Ô "khung": 15 phút … 4 giờ xét nến đã chốt (tự tải lại khi chốt nến), ngày / tuần ghép giá hiện tại.'),
     );
     this.renderConds();
     this.renderChips();

@@ -3,7 +3,8 @@
 //   • SIGNALS — tín hiệu đúng / sai kèm tham số (giá cắt lên SMA(5), RSI vào vùng quá mua trên 70…).
 // Số thống kê tính ở phiên đã đóng gần nhất (tech.js) rồi ghép giá hiện tại vào. Giá tính bằng nghìn đồng:
 // khoảng đệm 0.05 ở EMA / Bollinger là 50đ (một bước giá), y như FireAnt.
-// Tín hiệu có tham số tf (khung) = '15m' thì tính trên nến 15 phút đã chốt (lv.intra['15m']) thay cho nến ngày.
+// Tín hiệu chỉ báo có tham số tf (khung): 'D' nến ngày, 'W' nến tuần (st.w), khung trong phiên '15m' … '4h' tính trên nến
+// đã chốt (lv.intra[tf]) — xem frame.
 import * as tech from './tech.js';
 import { fsum } from './pyfloat.js';
 
@@ -60,6 +61,13 @@ export const METRICS = [
   ['brkTL6mPx', 'Giá vượt trendline giảm 6 tháng (giá đóng cửa phiên vượt)', 'Giá vượt 6T', 'pullback', 'price'],
   ['brkTL6mPct', '% giá hiện tại so với giá vượt trendline giảm 6 tháng', '% từ vượt 6T', 'pullback', 'pct'],
 ];
+// Khung nến của tín hiệu / cột giá trị chỉ báo: trong phiên (tech.INTRA_TFS, xét nến đã chốt), ngày, tuần (ghép giá hiện tại)
+export const TF_NAME = { '15m': '15 phút', '30m': '30 phút', '1h': '1 giờ', '2h': '2 giờ', '4h': '4 giờ', D: 'ngày', W: 'tuần' };
+export const TF_ORDER = Object.keys(TF_NAME);
+// Cột giá trị chỉ báo theo khung khác ngày: mã '<cột>@<khung>', vd 'rsi14@1h'
+export const TF_METRIC_BASE = ['rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct'];
+METRICS.push(...METRICS.filter((m) => TF_METRIC_BASE.includes(m[0])).flatMap(([k, label, head, group, fmt]) =>
+  TF_ORDER.filter((tf) => tf !== 'D').map((tf) => [`${k}@${tf}`, `${label} · khung ${TF_NAME[tf]}`, `${head} ${tf}`, group, fmt])));
 export const METRIC_KEYS = METRICS.map((m) => m[0]);
 export const METRIC_LABEL = Object.fromEntries(METRICS.map((m) => [m[0], m[1]]));
 export const METRIC_HEAD = Object.fromEntries(METRICS.map((m) => [m[0], m[2]]));
@@ -79,9 +87,13 @@ for (const [grp, ks] of Object.entries(BREAK_COMPANIONS)) for (const k of [grp, 
 // Cột tính từ chỉ báo + phiên hôm nay (giá / cao / thấp / KL hiện tại): indicatorMetrics
 export const INDICATOR_KEYS = ['rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct',
   ...['High', 'Low'].flatMap((s) => ['1m', '3m', '6m', '1y'].map((p) => `from${s}${p}`))];
+// Cột phải có lịch sử nến ngày (cột '@khung trong phiên' cần nến trong phiên)
 export const TECH_METRIC_KEYS = [...Object.keys(TECH_PERIOD), ...Object.keys(TECH_AVGVOL), ...Object.keys(TECH_DIST),
   ...Object.keys(TECH_VOLVS), ...Object.keys(BREAK_ALL_KEYS), ...INDICATOR_KEYS,
-  'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp'];
+  'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp', ...TF_METRIC_BASE.map((k) => `${k}@W`)];
+
+// Khung của một cột: 'rsi14@1h' → '1h'; cột thường → 'D'
+export const metricTf = (key) => (String(key).includes('@') ? String(key).split('@')[1] : 'D');
 
 const nz = (v) => v !== null && v !== undefined;
 const truthy = (v) => nz(v) && v !== 0 && v !== '' && !Number.isNaN(v);    // bool(v) của Python cho số / chuỗi
@@ -148,8 +160,8 @@ const P_HIGHLOW = P('period', 'trong', Object.keys(PERIOD_NAME), '1y');
 const P_MA = P('period', 'kỳ (phiên)', MA_PERIODS, 5);
 const P_RSI_UP = P('level', 'ngưỡng quá mua', [60, 65, 70, 75, 80, 85, 90], 70, true, 0, 100);
 const P_RSI_DOWN = P('level', 'ngưỡng quá bán', [10, 15, 20, 25, 30, 35, 40], 30, true, 0, 100);
-export const TF_NAME = { '15m': '15 phút', D: 'ngày' };
-const P_TF = P('tf', 'khung', Object.keys(TF_NAME), '15m');
+const P_TF = P('tf', 'khung', TF_ORDER, '15m');        // RSI tạo đáy (sinh ra cho khung 15 phút)
+const P_TFD = P('tf', 'khung', TF_ORDER, 'D');         // các tín hiệu chỉ báo khác: mặc định nến ngày như trước
 const P_RSI_LOOK = P('look', 'đáy trong (nến)', [8, 12, 16, 20, 24, tech.RSI_KEEP], 16);
 const P_MA_STATE = P('period', 'kỳ (phiên)', MA_PERIODS, 20);
 const P_STO_UP = P('level', 'ngưỡng quá mua', [70, 75, 80, 85, 90], 80, true, 0, 100);
@@ -232,18 +244,10 @@ const rsi = (kind) => (st, lv, p) => {
 
 // RSI tạo đáy (luật Long của anh bên hệ phái sinh): trong `look` nến gần nhất RSI(14) từng ≤ ngưỡng quá bán, nay đã
 // thoát lên trên ngưỡng + RSI trên Signal (WMA14 của RSI) + giá đóng cửa trên MA10 (SMA10).
-// Khung ngày ghép giá hiện tại như các tín hiệu khác; khung 15 phút xét nến đã chốt gần nhất (xem _rsi_bottom).
+// Mọi khung xét như nhau: thống kê tới nến trước + "nến đang xét" (ngày / tuần: giá hiện tại; trong phiên: nến đã chốt).
 function rsiBottom(st, lv, p) {
-  const rs = [...(st.rs || [])];
-  let price, ma;
-  if (p.tf === 'D') {
-    rs.push(rsiNow(st, lv.last)[1]);
-    price = lv.last;
-    ma = smaLive(st, lv.last, 10);
-  } else {
-    price = st.lc;
-    ma = st.p10;
-  }
+  const rs = [...(st.rs || []), rsiNow(st, lv.last)[1]];
+  const price = lv.last, ma = smaLive(st, lv.last, 10);
   const n = tech.RSI_SIGNAL_N, k = p.look;
   if (rs.some((r) => !nz(r)) || rs.length < Math.max(n, k) || !truthy(price) || !truthy(ma)) return false;
   const signal = fsum(rs.slice(-n).map((r, i) => (i + 1) * r)) / (n * (n + 1) / 2);    // WMA: nến mới nhất nặng nhất
@@ -681,6 +685,14 @@ export const SIGNAL_LIST = [
   S('BounceBrokenDownTrendline', 'pullback', 'Sau vượt trendline giảm {period}: bật lên ±{tol}%',
     [P_PB_TL, P_PB_TOL], retestDownLine(true)),
 ];
+// Tín hiệu chỉ báo chọn được khung (mặc định ngày); nhóm Giá (đỉnh / đáy theo tháng) và Pullback & trendline đo theo phiên → chỉ ngày
+const TF_GROUPS = ['volume', 'ma', 'rsi', 'mfi', 'stoch', 'osc', 'bb', 'macd', 'adx', 'sar', 'ichimoku'];
+const TF_SUFFIX = ' · khung {tf}';
+SIGNAL_LIST.forEach((s, i) => {
+  if (TF_GROUPS.includes(s.group) && s.params.every((p) => p.id !== 'tf')) {
+    SIGNAL_LIST[i] = { ...s, label: s.label + TF_SUFFIX, params: [P_TFD, ...s.params] };
+  }
+});
 export const SIGNALS = Object.fromEntries(SIGNAL_LIST.map((s) => [s.id, s]));
 
 // float(v) của Python cho tham số nhập tự do; null nếu không đổi được
@@ -717,7 +729,8 @@ export function normalizeSignal(raw) {
     params[p.id] = ok ? v : p.default;
   }
   if ('short' in params && 'long' in params && params.short >= params.long) {
-    [params.short, params.long] = sig.params.map((p) => p.default);     // đường ngắn phải ngắn hơn đường dài
+    const d = Object.fromEntries(sig.params.map((p) => [p.id, p.default]));
+    [params.short, params.long] = [d.short, d.long];                    // đường ngắn phải ngắn hơn đường dài
   }
   return { id: sig.id, params };
 }
@@ -727,7 +740,7 @@ export function paramText(value) {
   return TF_NAME[value] ?? PERIOD_NAME[value] ?? String(value);
 }
 
-// Khung nến tín hiệu cần: 'D' (nến ngày — mọi tín hiệu không có tham số khung) hoặc '15m'
+// Khung nến tín hiệu cần: 'D' (nến ngày — mọi tín hiệu không có tham số khung), 'W' hoặc khung trong phiên ('15m'…)
 export const signalTf = (sig) => ((sig && sig.params) || {}).tf ?? 'D';
 
 // Tên tín hiệu cho bộ chọn: chỗ tham số thay bằng '…'
@@ -741,20 +754,58 @@ export function catalog() {
   return out;
 }
 
-// Câu mô tả 1 tín hiệu, vd 'Giá cắt lên SMA(5)'
+// Câu mô tả 1 tín hiệu, vd 'Giá cắt lên SMA(5)' (khung ngày không ghi, khung khác ghi thêm ' · khung 1 giờ')
 export function describeSignal(sig) {
   const s = SIGNALS[sig && sig.id];
   if (!s) return String(sig && sig.id);
   const params = (sig && sig.params) || {};
-  return s.label.replace(/\{(\w+)\}/g, (m, k) => (k in params ? paramText(params[k]) : m));
+  const text = s.label.replace(/\{(\w+)\}/g, (m, k) => (k in params ? paramText(params[k]) : m));
+  return text.replaceAll(TF_SUFFIX.replace('{tf}', TF_NAME.D), '');
 }
 
-// Tín hiệu `sig` có đang đúng với thống kê `st` và giá hiện tại `lv` không. lv.intra = {'15m': thống kê nến 15 phút}
-// khi có tiêu chí cần. Thiếu số → false.
+// Nến trong phiên đã chốt gần nhất (tech.intradayStats: st.bar) đóng vai "phiên hôm nay" của khung đó
+export function intradayLive(st) {
+  const [, h, lo, c, v] = st.bar;
+  return { last: c, high: h, low: lo, volume: v, est: v };
+}
+
+// "Tuần này": các phiên đã đóng của tuần (st.wk = [cao, thấp, KL]) ghép phiên hôm nay (giá / cao / thấp / KL)
+export function weekLive(st, lv) {
+  const wk = st.wk;
+  if (!wk) return lv;
+  const [hi, lo] = hl(lv);
+  const vol = lv.volume || 0;
+  return { last: lv.last, high: Math.max(wk[0], hi), low: Math.min(wk[1], lo), volume: wk[2] + vol,
+    est: wk[2] + (lv.est || vol) };
+}
+
+// [thống kê, phiên đang xét] của khung tf từ thống kê nến ngày `st` và giá hiện tại `lv`: ngày giữ nguyên; tuần dùng
+// st.w + weekLive; khung trong phiên dùng lv.intra[tf] (tech.intradayStats) + nến đã chốt gần nhất. Xem frame của conditions.py.
+export function frame(tf, st, lv) {
+  if (tf === 'D') return [st, lv];
+  if (tf === 'W') return valid(st, lv) ? [st.w ?? null, weekLive(st, lv)] : [null, null];
+  const x = ((lv && lv.intra) || {})[tf];
+  return x && x.bar ? [x, intradayLive(x)] : [null, null];
+}
+
+// Cột giá trị chỉ báo theo khung khác ngày ('rsi14@1h', 'adx14@W'…): indicatorMetrics trên frame của từng khung
+export function tfMetrics(st, lv) {
+  const out = {};
+  for (const tf of TF_ORDER) {
+    if (tf === 'D') continue;
+    const [s, l] = frame(tf, st, lv);
+    const m = s ? indicatorMetrics(s, l) : {};
+    for (const k of TF_METRIC_BASE) out[`${k}@${tf}`] = m[k] ?? null;
+  }
+  return out;
+}
+
+// Tín hiệu `sig` có đang đúng với thống kê nến ngày `st` và giá hiện tại `lv` không. lv.intra = {khung: thống kê nến
+// trong phiên} khi có tiêu chí cần. Tín hiệu có khung khác ngày thì xét trên khung đó (frame). Thiếu số → false.
 export function evalSignal(sig, st, lv) {
   const s = SIGNALS[sig && sig.id];
   if (!s) return false;
-  if (signalTf(sig) !== 'D') st = ((lv && lv.intra) || {})[signalTf(sig)];
+  [st, lv] = frame(signalTf(sig), st, lv);
   if (!valid(st, lv)) return false;
   const params = { ...((sig && sig.params) || {}) };
   if ('pct' in params) params.pct = params.pct / 100;      // lưu theo % (50), tính theo tỷ lệ (0.5)

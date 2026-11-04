@@ -112,7 +112,7 @@ test('MA dài: giá cắt lên SMA / EMA 50, 100, 200', () => {
     }
   }
   assert.deepEqual(cond.normalizeSignal({ id: 'ShortSMACrossAboveLongSMA', params: { short: 50, long: 200 } }).params,
-    { short: 50, long: 200 });
+    { tf: 'D', short: 50, long: 200 });
 });
 
 test('chưa đủ phiên thì không tính', () => {
@@ -424,13 +424,13 @@ test('thiếu số thì không khớp và không vỡ', () => {
 test('chuẩn hoá tín hiệu từ cài đặt', () => {
   assert.equal(cond.normalizeSignal({ id: 'KhongCo' }), null);
   assert.equal(cond.normalizeSignal('rác'), null);
-  assert.deepEqual(cond.normalizeSignal({ id: 'PriceCrossAboveSMA' }).params, { period: 5 });
-  assert.deepEqual(sig('PriceCrossAboveSMA', { period: 7 }).params, { period: 5 });
-  assert.deepEqual(sig('PriceCrossAboveSMA', { period: 10.0 }).params, { period: 10 });
-  assert.deepEqual(sig('RSIAboveOverBoughtLine', { level: 72.5 }).params, { level: 72.5 });
-  assert.deepEqual(sig('RSIAboveOverBoughtLine', { level: 500 }).params, { level: 70 });
-  assert.deepEqual(sig('PriceAboveBollingerBands', { std: 'abc' }).params, { std: 2 });
-  assert.deepEqual(sig('ShortSMACrossAboveLongSMA', { short: 15, long: 15 }).params, { short: 5, long: 15 });
+  assert.deepEqual(cond.normalizeSignal({ id: 'PriceCrossAboveSMA' }).params, { tf: 'D', period: 5 });
+  assert.deepEqual(sig('PriceCrossAboveSMA', { period: 7 }).params, { tf: 'D', period: 5 });
+  assert.deepEqual(sig('PriceCrossAboveSMA', { period: 10.0 }).params, { tf: 'D', period: 10 });
+  assert.deepEqual(sig('RSIAboveOverBoughtLine', { level: 72.5 }).params, { tf: 'D', level: 72.5 });
+  assert.deepEqual(sig('RSIAboveOverBoughtLine', { level: 500 }).params, { tf: 'D', level: 70 });
+  assert.deepEqual(sig('PriceAboveBollingerBands', { std: 'abc' }).params, { tf: 'D', std: 2 });
+  assert.deepEqual(sig('ShortSMACrossAboveLongSMA', { short: 15, long: 15 }).params, { tf: 'D', short: 5, long: 15 });
 });
 
 test('mô tả tín hiệu', () => {
@@ -445,10 +445,10 @@ test('danh mục cho bộ chọn điều kiện', () => {
   const cat = cond.catalog();
   assert.deepEqual(Object.keys(cat), cond.GROUPS.map(([g]) => g));
   assert.ok(Object.values(cat).every((v) => v.length));
-  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 45 + 79);
+  assert.equal(Object.values(cat).reduce((a, v) => a + v.length, 0), 45 + 48 + 79);    // + 48 cột theo khung
   assert.deepEqual(cat.price[0], ['Thay đổi giá 1 tuần (%)', 'metric', 'change1w']);
-  assert.ok(cat.ma.some((x) => x[2] === 'PriceCrossAboveSMA' && x[0] === 'Giá cắt lên SMA(…)'));
-  assert.ok(cat.macd.some((x) => x[2] === 'MACDCrossAboveZeroLine' && x[0] === 'MACD cắt lên đường 0'));
+  assert.ok(cat.ma.some((x) => x[2] === 'PriceCrossAboveSMA' && x[0] === 'Giá cắt lên SMA(…) · khung …'));
+  assert.ok(cat.macd.some((x) => x[2] === 'MACDCrossAboveZeroLine' && x[0] === 'MACD cắt lên đường 0 · khung …'));
   assert.equal(cond.paramText('1m'), '1 tháng');
   assert.equal(cond.paramText(70.0), '70');
   assert.equal(cond.paramText(3.5), '3.5');
@@ -463,25 +463,33 @@ test('danh mục đủ 79 tín hiệu', () => {
   }
 });
 
-// ── RSI tạo đáy (luật Long hệ phái sinh của anh) + chọn khung 15 phút / ngày ──
-// RSI 30 nến 15 phút đã chốt: rơi xuống đáy 23 (13 nến trước) rồi đi lên 44
-const RS = [...Array(10).fill(50), 45, 40, 35, 30, 26, 24, 23, 25, 27, 29, 31, 33, 35, 37, 38, 39, 40, 41, 42, 44];
-const ev15 = ({ rs = RS, lc = 11, p10 = 10, ...params } = {}) =>
-  cond.evalSignal(sig('RSIBottom', { tf: '15m', ...params }), null, { ...lv(lc), intra: { '15m': { rs, lc, p10 } } });
+// ── RSI tạo đáy (luật Long hệ phái sinh của anh) + chọn khung ──
+// RSI 29 nến đã chốt: rơi xuống đáy 23 (12 nến trước) rồi đi lên 42; nến đang xét giá 10 = giá đóng nến trước
+// → RSI của nó = avgGain / (avgGain + avgLoss) × 100 = `rsi` (chọn avgGain = rsi, avgLoss = 100 − rsi)
+const RS = [...Array(10).fill(50), 45, 40, 35, 30, 26, 24, 23, 25, 27, 29, 31, 33, 35, 37, 38, 39, 40, 41, 42];
+const rbSt = ({ rsi = 44, p9 = 9.9, rs = RS } = {}) => ({ rs, ag: rsi, al: 100 - rsi, lc: 10, p9, bar: [0, 10, 10, 10, 1] });
+function evRb({ tf = '15m', level, look, ...kw } = {}) {
+  const params = { tf, ...(level === undefined ? {} : { level }), ...(look === undefined ? {} : { look }) };
+  const st = rbSt(kw), s = sig('RSIBottom', params);
+  return tf === 'D' ? cond.evalSignal(s, st, lv(10)) : cond.evalSignal(s, null, { ...lv(10), intra: { [tf]: st } });
+}
 
-test('RSI tạo đáy: đủ 3 dấu hiệu khung 15 phút', () => {
-  assert.equal(ev15(), true);
-  assert.equal(ev15({ look: 8 }), false);                         // đáy 23 nằm ngoài 8 nến gần nhất
-  assert.equal(ev15({ rs: [...RS.slice(0, -1), 29] }), false);    // RSI chưa thoát vùng 30
-  assert.equal(ev15({ rs: [...RS.slice(0, -1), 31] }), false);    // thoát 30 nhưng tụt dưới Signal (WMA14 ≈ 36.3)
-  assert.equal(ev15({ lc: 9.9 }), false);                         // giá dưới MA10
-  assert.equal(ev15({ level: 25 }), true);
-  assert.equal(ev15({ level: 20 }), false);                       // đáy chưa xuống tới 20
-  assert.equal(ev15({ rs: RS.slice(-10) }), false);               // thiếu nến (WMA14 cần 14 RSI)
-  // Khung 15 phút chỉ đọc thống kê nến 15 phút: chưa tải (hoặc mã ít nến) thì không khớp
+test('RSI tạo đáy: đủ 3 dấu hiệu, mọi khung', () => {
+  for (const tf of ['15m', '30m', '1h', '2h', '4h', 'D']) assert.equal(evRb({ tf }), true, tf);
+  assert.equal(evRb({ look: 8 }), false);                         // đáy 23 nằm ngoài 8 nến gần nhất
+  assert.equal(evRb({ rsi: 29 }), false);                         // RSI chưa thoát vùng 30
+  assert.equal(evRb({ rsi: 31 }), false);                         // thoát 30 nhưng tụt dưới Signal (WMA14 ≈ 36.3)
+  assert.equal(evRb({ p9: 10.1 }), false);                        // giá dưới MA10
+  assert.equal(evRb({ level: 25 }), true);                        // đáy 23 ≤ 25, RSI 44 > 25
+  assert.equal(evRb({ level: 20 }), false);                       // đáy chưa xuống tới 20
+  assert.equal(evRb({ rs: RS.slice(-9) }), false);                // thiếu nến (WMA14 cần 14 RSI)
+  // Khung trong phiên chỉ đọc thống kê của khung đó: chưa tải (hoặc mã ít nến) thì không khớp
   const s = sig('RSIBottom', { tf: '15m' });
-  assert.equal(cond.evalSignal(s, { rs: RS, lc: 11, p10: 10 }, lv(11)), false);
-  assert.equal(cond.evalSignal(s, { lc: 1 }, { ...lv(11), intra: { '15m': {} } }), false);
+  assert.equal(cond.evalSignal(s, rbSt(), lv(10)), false);
+  assert.equal(cond.evalSignal(s, rbSt(), { ...lv(10), intra: { '1h': rbSt() } }), false);
+  assert.equal(cond.evalSignal(s, { lc: 1 }, { ...lv(10), intra: { '15m': {} } }), false);
+  // Khung tuần: thống kê các tuần đã đóng (st.w) + tuần này
+  assert.equal(cond.evalSignal(sig('RSIBottom', { tf: 'W' }), { lc: 9, w: rbSt(), wk: null }, lv(10)), true);
 });
 
 test('RSI tạo đáy: khung ngày ghép giá hiện tại khớp với nến đã chốt', () => {
@@ -525,20 +533,20 @@ test('nến 15 phút đã chốt', () => {
   assert.equal(tech.intradayKey(at(29, 8, 0)), '2026-10-29 00:00');
   assert.equal(tech.intradayKey(at(31, 10, 0)), '2026-10-31 00:00');
   assert.equal(tech.intradayKey(at(30, 6, 0)), '2026-10-30 00:00');      // 6h sáng giờ VN = 23h UTC hôm trước
-  // Nến có giờ mở từ cutoff trở đi (đang chạy) bị bỏ; null = mọi nến; quá ít nến → null
+  // Nến có giờ mở từ cutoff trở đi (đang chạy) bị bỏ; nến đã chốt gần nhất nằm ở bar, thống kê tính tới nến trước
   const c = Array.from({ length: 70 }, (_, i) => 10 + (i % 5));
   const bars = { s: 'ok', t: c.map((_, i) => i * 900), o: c, h: c, l: c, c, v: c.map(() => 1) };
   const st = tech.intradayStats(bars, 65 * 900);
-  assert.deepEqual([st.n, st.lt, st.lc], [65, 64 * 900, c[64]]);
-  assert.equal(st.p10, c.slice(55, 65).reduce((a, b) => a + b) / 10);
-  assert.equal(tech.intradayStats(bars).n, 70);
+  assert.deepEqual([st.n, st.lc, st.bar], [64, c[63], [64 * 900, c[64], c[64], c[64], 1]]);
+  near(st.p9, c.slice(55, 64).reduce((a, b) => a + b) / 9, 5);
+  assert.equal(tech.intradayStats(bars).n, 69);
   assert.equal(tech.intradayStats(bars, 50 * 900), null);
   assert.equal(tech.intradayStats({ s: 'no_data' }), null);
 });
 
 test('RSI tạo đáy: tham số, mô tả và nối vào bộ lọc', () => {
   assert.deepEqual(sig('RSIBottom').params, { tf: '15m', level: 30, look: 16 });
-  assert.deepEqual(sig('RSIBottom', { tf: '4h', look: 17 }).params, { tf: '15m', level: 30, look: 16 });
+  assert.deepEqual(sig('RSIBottom', { tf: '3h', look: 17 }).params, { tf: '15m', level: 30, look: 16 });
   assert.equal(cond.describeSignal(sig('RSIBottom', { tf: 'D' })),
     'RSI tạo đáy khung ngày: thoát quá bán 30 (đáy trong 16 nến), RSI trên Signal, giá trên MA10');
   assert.equal(cond.paramText('15m'), '15 phút');
@@ -547,11 +555,104 @@ test('RSI tạo đáy: tham số, mô tả và nối vào bộ lọc', () => {
   assert.deepEqual([core.needsIntraday(day), core.needsTech(day)], [false, true]);
   assert.equal(core.needsIntraday({ signals: [sig('MACDAboveZeroLine')] }), false);
   const q = { Symbol: 'AAA', Exchange: 'HOSTC', PriceCurrent: 11000, TotalVolume: 0 };
-  const st = { rs: RS, lc: 11, p10: 10 };
+  const st = rbSt();
   const row = core.transformQuote(q, null, null, Date.now(), { '15m': st });
   assert.deepEqual(row._live.intra, { '15m': st });
   assert.deepEqual(core.applySignals([row], m15.signals), [row]);
+  near(row['rsi14@15m'], 44);                                     // cột giá trị chỉ báo theo khung
+  assert.equal(row['rsi14@1h'], null);
   assert.ok(!('intra' in core.transformQuote(q)._live));
+});
+
+// ── Chọn khung cho mọi tín hiệu chỉ báo (chép class KhungNen của tests/test_conditions.py) ──
+// Python random.Random(7) không chép được → dãy giả ngẫu nhiên riêng (LCG); điều cần thử y hệt bản Python
+function lcg(seed) {
+  let x = seed;
+  return () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
+}
+
+test('mọi tín hiệu chỉ báo: khung 1 giờ khớp khung ngày trên cùng dãy nến', () => {
+  const rnd = lcg(7), uni = (a, b) => a + (b - a) * rnd();
+  const c = [20], vol = [1000];
+  for (let i = 0; i < 299; i++) {
+    c.push(Math.round(Math.max(1, c[c.length - 1] * (1 + uni(-0.04, 0.04))) * 100) / 100);
+    vol.push(200 + Math.floor(rnd() * 4801));
+  }
+  const h = c.map((x) => Math.round(x * (1 + uni(0, 0.02)) * 100) / 100);
+  const lo = c.map((x) => Math.round(x * (1 - uni(0, 0.02)) * 100) / 100);
+  const days = c.map((_, i) => addDays('2025-01-01', i));
+  const daily = tech.statsFromBars({ s: 'ok', t: days, o: c, h, l: lo, c, v: vol }, days[days.length - 1], keep);
+  const intra = tech.intradayStats({ s: 'ok', t: c.map((_, i) => i * 3600), o: c, h, l: lo, c, v: vol });
+  const live = { last: c[299], high: h[299], low: lo[299], volume: vol[299], est: vol[299] };
+  const tfSigs = cond.SIGNAL_LIST.filter((s) => s.params.some((p) => p.id === 'tf'));
+  assert.equal(tfSigs.length, 70);
+  let hits = 0;
+  for (const s of tfSigs) {
+    const rest = s.params.slice(1);
+    const n = rest.length ? Math.min(...rest.map((p) => p.choices.length)) : 1;      // zip của Python
+    for (let j = 0; j < n; j++) {
+      const vals = Object.fromEntries(rest.map((p) => [p.id, p.choices[j]]));
+      const d = cond.evalSignal(sig(s.id, { tf: 'D', ...vals }), daily, live);
+      assert.equal(cond.evalSignal(sig(s.id, { tf: '1h', ...vals }), null, { ...lv(99), intra: { '1h': intra } }), d, s.id);
+      hits += d;
+    }
+  }
+  assert.ok(hits > 20, String(hits));
+  const m = cond.tfMetrics(null, { ...lv(99), intra: { '1h': intra } });
+  const d = cond.indicatorMetrics(daily, live);
+  for (const k of cond.TF_METRIC_BASE) assert.equal(m[`${k}@1h`], d[k], k);
+});
+
+test('tham số khung', () => {
+  assert.deepEqual(sig('PriceCrossAboveSMA').params, { tf: 'D', period: 5 });        // mặc định ngày như trước
+  assert.deepEqual(sig('MACDAboveZeroLine', { tf: '4h' }).params, { tf: '4h' });
+  assert.deepEqual(sig('MACDAboveZeroLine', { tf: '3h' }).params, { tf: 'D' });
+  assert.ok(!('tf' in sig('AbovePreviousHigh').params));                              // đỉnh / đáy theo tháng: chỉ ngày
+  assert.ok(!('tf' in sig('PullbackToSMA').params));
+  assert.equal(cond.describeSignal(sig('PriceCrossAboveSMA', { period: 20 })), 'Giá cắt lên SMA(20)');
+  assert.equal(cond.describeSignal(sig('PriceCrossAboveSMA', { tf: '1h', period: 20 })), 'Giá cắt lên SMA(20) · khung 1 giờ');
+  assert.equal(cond.METRIC_LABEL['rsi14@W'], 'RSI(14) hiện tại · khung tuần');
+  assert.equal(cond.metricTf('rsi14@2h'), '2h');
+  const crits = [{ signals: [sig('MACDAboveZeroLine', { tf: '30m' })], filters: { 'adx14@2h': { operator: 'gt', value: 25 } } },
+    { signals: [sig('MACDAboveZeroLine', { tf: 'W' })], filters: {} }];
+  assert.deepEqual([...core.intradayTfs(crits)].sort(), ['2h', '30m']);
+  assert.deepEqual([core.needsTech(crits[0]), core.needsTech(crits[1])], [false, true]);  // tuần gộp từ nến ngày
+  assert.equal(core.needsTech({ filters: { 'rsi14@W': { operator: 'lt', value: 30 } } }), true);
+});
+
+test('nến gộp và mốc từng khung', () => {
+  const vn = (h, m) => Date.UTC(2026, 9, 29, h - 7, m) / 1000;                          // giờ VN → giây Unix
+  const rows = [[vn(9, 15), 10, 11, 9, 10.5, 100], [vn(9, 30), 10.5, 12, 10, 11, 200], [vn(9, 45), 11, 11.5, 10.8, 11.2, 50],
+    [vn(10, 0), 11.2, 11.3, 11, 11.1, 10]];
+  assert.deepEqual(tech.mergeBars(rows, 30), [[vn(9, 0), 10, 11, 9, 10.5, 100], [vn(9, 30), 10.5, 12, 10, 11.2, 250],
+    [vn(10, 0), 11.2, 11.3, 11, 11.1, 10]]);
+  const h1 = [9, 10, 11, 13, 14].map((hh) => [vn(hh, 0), 1, 2, 0.5, hh, 10]);
+  assert.deepEqual(tech.mergeBars(h1, 240).map((b) => [b[0], b[4], b[5]]), [[vn(9, 0), 11, 30], [vn(13, 0), 14, 20]]);
+  assert.deepEqual(tech.mergeBars(h1, 120).map((b) => b[0]), [vn(9, 0), vn(11, 0), vn(13, 0)]);
+  const at = (h, m) => Date.UTC(2026, 9, 29, h - 7, m, 30);
+  assert.equal(tech.intradayCutoff(at(10, 59), 60), vn(10, 0));
+  assert.equal(tech.intradayCutoff(at(10, 59), 120), vn(9, 0));
+  assert.equal(tech.intradayCutoff(at(14, 50), 240), vn(13, 0));
+  assert.equal(tech.intradayCutoff(at(9, 40), 30), vn(9, 30));
+  assert.equal(tech.intradayCutoff(at(12, 0), 240), null);                              // nghỉ trưa: nến sáng đã chốt
+  assert.equal(tech.intradayKey(at(12, 0), 60), '2026-10-29 11:30');
+  assert.equal(tech.intradayKey(at(13, 20), 240), '2026-10-29 13:00');
+});
+
+test('nến tuần', () => {
+  // 3 tuần + thứ Hai, Ba tuần này (29/10/2026 là thứ Năm → tuần này từ 26/10)
+  const days = Array.from({ length: 23 }, (_, i) => addDays('2026-10-05', i));           // 05/10 … 27/10
+  const rows = days.map((d, k) => { const i = k + 2; return [d, i, i + 1, i - 1, i + 0.5, 10]; });
+  const [st, wk] = tech.weeklyParts(rows, '2026-10-29');
+  assert.equal(st, null);                                                                // < 20 tuần: chưa tính
+  assert.deepEqual(wk, [24 + 1, 23 - 1, 20]);                                            // 26/10 + 27/10
+  assert.deepEqual([...new Set(days.map(tech.weekStart))].slice(0, 3), ['2026-10-05', '2026-10-12', '2026-10-19']);
+  assert.deepEqual(cond.weekLive({ wk: [12, 9, 1000] }, lv(10, { high: 11, low: 8, volume: 500, est: 800 })),
+    { last: 10, high: 12, low: 8, volume: 1500, est: 1800 });
+  assert.deepEqual(cond.weekLive({ wk: null }, lv(10)), lv(10));                         // thứ Hai: tuần chỉ có hôm nay
+  const s200 = statsOf(200)[0];                                                          // 200 ngày ≈ 29 tuần
+  assert.notEqual(s200.w, null);
+  assert.notEqual(cond.tfMetrics(s200, lv(201, { high: 201.5, low: 200 }))['rsi14@W'], null);
 });
 
 // ── Chỉ báo bổ sung (chép class ChiBaoBoSung của tests/test_conditions.py) ──
@@ -627,7 +728,7 @@ test('giá so với MA, EMA cắt nhau', () => {
   assert.equal(evB('ShortSMAAboveLongSMA', lv(61)), false);
   assert.equal(evB('ShortEMACrossBelowLongEMA', lv(1), ST, { short: 10, long: 20 }), true);
   assert.equal(evB('ShortEMACrossAboveLongEMA', lv(61), ST, { short: 10, long: 20 }), false);
-  assert.deepEqual(sig('ShortEMACrossAboveLongEMA', { short: 50, long: 20 }).params, { short: 10, long: 20 });
+  assert.deepEqual(sig('ShortEMACrossAboveLongEMA', { short: 50, long: 20 }).params, { tf: 'D', short: 10, long: 20 });
 });
 
 test('cột số chỉ báo', () => {
@@ -729,7 +830,7 @@ test('tiêu chí mang theo tín hiệu', () => {
   const c = core.criteriaFromConfig({ criteria: [
     { name: 'Cắt SMA', exchange: 'HSX', signals: [{ id: 'PriceCrossAboveSMA', params: { period: 10 } }, { id: 'KhongCo' }, 'rác'] },
     { name: 'Thường', filters: { price: { operator: 'lt', value: 20 } } }] });
-  assert.deepEqual(c[0].signals, [{ id: 'PriceCrossAboveSMA', params: { period: 10 } }]);
+  assert.deepEqual(c[0].signals, [{ id: 'PriceCrossAboveSMA', params: { tf: 'D', period: 10 } }]);
   assert.ok(!('signals' in c[1]));
   assert.ok(core.hasConditions(c[0]));
   assert.ok(core.hasConditions(c[1]));

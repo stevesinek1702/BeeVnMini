@@ -92,7 +92,7 @@ export function quoteVnDate(q) {
 }
 
 // Quote FireAnt → hàng bảng giá. hist = MA / KL trung bình; techStats = thống kê kỹ thuật của mã; nowMs = giờ hiện tại;
-// intra = {'15m': thống kê nến 15 phút} (chỉ khi có tiêu chí dùng khung 15 phút).
+// intra = {khung: thống kê nến trong phiên} ('15m', '1h'… — chỉ khi có tiêu chí dùng khung đó).
 // Hàng mang thêm _tech / _live để các điều kiện tín hiệu tính; hai khoá này không hiện ra bảng.
 export function transformQuote(q, hist = null, techStats = null, nowMs = Date.now(), intra = null) {
   const h = hist || {};
@@ -130,6 +130,7 @@ export function transformQuote(q, hist = null, techStats = null, nowMs = Date.no
   row._live = { last: price, high: k(q.PriceHigh), low: k(q.PriceLow), volume: vol, est };
   Object.assign(row, conditions.indicatorMetrics(st, row._live));
   if (intra) row._live.intra = intra;
+  Object.assign(row, conditions.tfMetrics(st, row._live));
   return row;
 }
 
@@ -254,15 +255,25 @@ export function hasConditions(c) {
 
 const TECH_KEYS = new Set(conditions.TECH_METRIC_KEYS);
 
-// Tiêu chí có dùng điều kiện cần lịch sử ~1 năm (thống kê kỹ thuật) không — không thì khỏi tải
+// Tiêu chí có dùng điều kiện cần lịch sử nến ngày ~1 năm (khung ngày / tuần) không — không thì khỏi tải
 export function needsTech(c) {
-  return (c.signals || []).some((s) => conditions.signalTf(s) === 'D')
+  return (c.signals || []).some((s) => ['D', 'W'].includes(conditions.signalTf(s)))
     || activeFilterKeys(c.filters).some((k) => TECH_KEYS.has(k));
 }
 
-// Tiêu chí có tín hiệu khung 15 phút không — có thì tải nến 15 phút sau mỗi lần chốt nến
+// Các khung trong phiên ('15m', '1h'…) mà các tiêu chí dùng (tín hiệu có khung, cột '@khung') — để tải nến trong phiên
+export function intradayTfs(criteria) {
+  const tfs = new Set();
+  for (const c of criteria) {
+    for (const s of c.signals || []) tfs.add(conditions.signalTf(s));
+    for (const k of activeFilterKeys(c.filters)) tfs.add(conditions.metricTf(k));
+  }
+  return new Set([...tfs].filter((tf) => tf in tech.INTRA_TFS));
+}
+
+// Tiêu chí có dùng khung trong phiên không — có thì tải nến trong phiên sau mỗi lần chốt nến
 export function needsIntraday(c) {
-  return (c.signals || []).some((s) => conditions.signalTf(s) === '15m');
+  return intradayTfs([c]).size > 0;
 }
 
 // Tiêu chí có lọc theo phiên vượt trendline giảm không — có thì phải quét lùi khi tải chỉ báo

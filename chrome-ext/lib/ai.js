@@ -84,6 +84,7 @@ export const TOOL = {
 
 function paramSpec(p) {
   const show = (v) => (typeof v === 'string' ? `"${v}"` : String(v));
+  if (p.id === 'tf') return `tf: khung nến (xem luật "Khung nến"; mặc định ${show(p.default)})`;
   return p.free
     ? `${p.id}: số từ ${p.lo} đến ${p.hi} (gợi ý ${p.choices.map(show).join(', ')}; mặc định ${show(p.default)})`
     : `${p.id}: một trong ${p.choices.map(show).join(', ')} (mặc định ${show(p.default)})`;
@@ -119,6 +120,9 @@ Luật:
   (80% → 80; gấp 2 lần → 200). Không có kỳ 20 / 50 thì chọn kỳ gần nhất.
 - "Thanh khoản" không nói rõ: số cổ phiếu → KLTB 20 phiên (avgVol20); số tiền tỷ đồng → GTTB 20 phiên (avgValue20).
 - Tham số tín hiệu phải theo đúng lựa chọn cho phép; người dùng không nói thì bỏ tham số đó (dùng mặc định).
+- Khung nến: tín hiệu có tham số tf chọn được khung ${cond.TF_ORDER.map((tf) => `"${tf}" (${cond.TF_NAME[tf]})`).join(', ')}.
+  Vd "RSI khung 1 giờ cắt lên 30", "MACD tuần cắt lên" → đặt tf = "1h" / "W". Không nói khung → bỏ tf.
+  Cột giá trị chỉ báo theo khung khác ngày có mã dạng <mã>@<khung> (vd rsi14@1h, adx14@W) — xem danh mục cột.
 - Ý nào danh mục không có (vd vốn hoá, P/E, EPS, lợi nhuận, ngành…) → ghi vào "unsupported", không tự bịa mã.
   Trước khi ghi "unsupported" phải dò lại danh mục: các chỉ báo kỹ thuật dưới đây ĐỀU CÓ.
 

@@ -1,6 +1,6 @@
 // Bee Mini (Bee.vn mini trong Chrome) — trang chính (tab của extension). Chép luồng của beevn_mini.pyw:
 // lấy giá 30 s/lần trong giờ (10 phút ngoài giờ), MA / KL trung bình từ VNDirect mỗi ngày, chỉ báo kỹ thuật khi có
-// tiêu chí cần, nến 15 phút sau mỗi lần chốt nến khi có tiêu chí khung 15 phút, lọc từng tiêu chí,
+// tiêu chí cần, nến trong phiên (15 phút / 1 giờ) sau mỗi lần chốt nến khi có tiêu chí khung trong phiên, lọc từng tiêu chí,
 // báo mã mới (đọc tên / ting / im), vẽ bảng ở tab và ở cửa sổ nổi (PiP).
 import * as core from './lib/core.js';
 import * as tech from './lib/tech.js';
@@ -11,8 +11,8 @@ import { Settings } from './settings.js';
 
 const OFF_HOURS_SEC = 600;
 const HIST_CHECK_SEC = 600;
-const INTRA_DELAY_SEC = 20;     // chốt nến 15 phút xong chờ chừng này giây mới tải, cho dchart kịp ghi nến vừa chốt
-const INTRA_KEEP_SEC = 1200;    // bộ nến 15 phút của mốc trước vẫn dùng trong lúc đang tải mốc mới (~30 s)
+const INTRA_DELAY_SEC = 20;     // chốt nến xong chờ chừng này giây mới tải, cho dchart kịp ghi nến vừa chốt
+const INTRA_KEEP_SEC = 300;     // bộ nến của mốc trước vẫn dùng thêm chừng này giây sau 1 nến, trong lúc đang tải mốc mới
 const STALE_SEC = 120;
 const MAX_ROWS = 25;          // 1 khối: quá số hàng này thì lăn chuột để xem tiếp
 const SECTION_ROWS = 8;       // nhiều khối: mỗi khối mặc định hiện chừng này hàng (＋/－ để đổi)
@@ -26,7 +26,7 @@ const DEFAULT_CONFIG = {
 
 const $ = (id) => document.getElementById(id);
 const today = () => core.vnDate(Date.now() / 1000);
-const intraNow = () => Date.now() - INTRA_DELAY_SEC * 1000;     // mốc nến 15 phút tính lùi INTRA_DELAY_SEC giây
+const intraNow = () => Date.now() - INTRA_DELAY_SEC * 1000;     // mốc nến trong phiên tính lùi INTRA_DELAY_SEC giây
 
 class App {
   async init() {
@@ -36,11 +36,12 @@ class App {
     this.cfg.watch = core.parseSymbols(this.cfg.watch);
     this.hist = saved.hist || {};
     this.tech = saved.tech || {};
-    this.intra = saved.intra || {};      // thống kê nến 15 phút — chỉ tải khi có tiêu chí dùng khung 15 phút
+    // thống kê nến trong phiên {'15' | '60': bộ đã tải} — chỉ tải khi có tiêu chí dùng khung trong phiên
+    this.intra = Object.fromEntries(Object.entries(saved.intra || {}).filter(([feed]) => /^\d+$/.test(feed)));
     this.histProgress = this.hist.day === today() && this.histComplete() ? 1 : 0;
     this.techProgress = this.techFresh(today()) ? 1 : 0;
     this.intraProgress = Object.keys(this.intraData()).length ? 1 : 0;
-    this.lastIntraTry = 0;
+    this.lastIntraTry = {};
     this.quotes = null;
     this.fetchedAt = null;
     this.lastQuoteTry = 0;
@@ -190,42 +191,63 @@ class App {
     }
   }
 
-  // Thống kê nến 15 phút của mốc hiện tại; vừa sang mốc mới mà đang tải dở thì tạm dùng bộ của mốc trước.
-  // Bộ cũ hơn (máy ngủ, mất mạng lâu) thì bỏ — tín hiệu sẽ sai.
+  // {mã: {khung: thống kê nến trong phiên}} gộp từ các loại nến nguồn (this.intra = {'15' | '60': bộ đã tải}) còn dùng
+  // được: cùng mốc hiện tại, hoặc vừa sang mốc mới mà đang tải dở (chưa quá 1 nến + INTRA_KEEP_SEC). Bộ cũ hơn (máy ngủ,
+  // mất mạng lâu) thì bỏ — tín hiệu sẽ sai.
   intraData() {
-    const i = this.intra;
-    const ok = i.ver === tech.VERSION
-      && (i.key === tech.intradayKey(intraNow()) || Date.now() - (i.at || 0) < INTRA_KEEP_SEC * 1000);
-    return ok ? (i.data || {}) : {};
+    const out = {};
+    for (const [feed, c] of Object.entries(this.intra)) {
+      if (!/^\d+$/.test(feed) || !c || c.ver !== tech.VERSION) continue;
+      if (c.key !== tech.intradayKey(intraNow(), +feed)
+        && Date.now() - (c.at || 0) >= (+feed * 60 + INTRA_KEEP_SEC) * 1000) continue;
+      for (const [sym, d] of Object.entries(c.data || {})) {
+        for (const [tf, st] of Object.entries(d || {})) if (st) (out[sym] ??= {})[tf] = st;
+      }
+    }
+    return out;
   }
 
-  // Nến 15 phút cả thị trường (~30 s) cho tín hiệu khung 15 phút: tải lại ngay sau mỗi lần chốt nến (mốc
-  // tech.intradayKey đổi; nghỉ trưa / ngoài giờ thì đứng yên), chỉ khi có tiêu chí cần. Mã lỗi mạng: 10 phút sau thử lại.
+  // Các khung trong phiên đang có số dùng được
+  intraTfs() {
+    return new Set(Object.values(this.intraData()).flatMap(Object.keys));
+  }
+
+  // Nến trong phiên cả thị trường cho các khung các tiêu chí dùng: nến nguồn 15 phút (khung 15 / 30 phút) và 1 giờ (khung
+  // 1 / 2 / 4 giờ), ~30–40 s mỗi loại. Tải lại ngay sau mỗi lần chốt nến của loại đó (mốc tech.intradayKey đổi; nghỉ trưa /
+  // ngoài giờ thì đứng yên), chỉ khi có tiêu chí cần. Mã lỗi mạng: 10 phút sau thử lại. Xem intra_loop của beevn_mini.pyw.
   async loadIntra() {
-    if (this.busy.intra || !this.cfg.criteria.some(core.needsIntraday)) return;
-    const at = intraNow();
-    const key = tech.intradayKey(at);
-    const same = this.intra.key === key && this.intra.ver === tech.VERSION;
-    const done = same ? (this.intra.data || {}) : {};
-    if (Object.keys(done).length >= SYMBOLS.length) return;
-    if (same && Date.now() - this.lastIntraTry < HIST_CHECK_SEC * 1000) return;
+    if (this.busy.intra) return;
+    const tfs = [...core.intradayTfs(this.cfg.criteria)];
+    const feeds = [...new Set(tfs.map((tf) => tech.INTRA_TFS[tf][0]))].sort((a, b) => a - b);
+    if (!feeds.length) return;
     this.busy.intra = true;
-    this.lastIntraTry = Date.now();
     try {
-      const first = !Object.keys(this.intraData()).length;     // chưa có bộ nào dùng được → hiện % đang tải
-      if (first) {
-        this.intraProgress = Object.keys(done).length / SYMBOLS.length;
-        this.render();
+      for (const feed of feeds) {
+        const want = tfs.filter((tf) => tech.INTRA_TFS[tf][0] === feed).sort();
+        const at = intraNow();
+        const key = tech.intradayKey(at, feed);
+        const old = this.intra[feed] || {};
+        const same = old.key === key && old.ver === tech.VERSION && want.every((tf) => (old.tfs || []).includes(tf));
+        const done = same ? (old.data || {}) : {};
+        if (Object.keys(done).length >= SYMBOLS.length) continue;
+        if (same && Date.now() - (this.lastIntraTry[feed] || 0) < HIST_CHECK_SEC * 1000) continue;
+        this.lastIntraTry[feed] = Date.now();
+        const before = this.intraTfs();
+        const first = !want.every((tf) => before.has(tf));      // khung cần chưa có số dùng được → hiện % đang tải
+        if (first) {
+          this.intraProgress = Object.keys(done).length / SYMBOLS.length;
+          this.render();
+        }
+        const data = await fetchAllIntraday(SYMBOLS, at, feed, want, done,
+          first ? (p) => { this.intraProgress = p; this.renderSoon(); } : null);
+        this.intra = { ...this.intra, [feed]: { key, ver: tech.VERSION, tfs: want, at: Date.now(), data } };
+        await chrome.storage.local.set({ intra: this.intra });
+        this.intraProgress = Object.keys(data).length / SYMBOLS.length;
+        // Khung trong phiên vừa có số lần đầu → cả loạt mã bỗng khớp, không phải "mã mới lọt lọc" → lấy lại mốc so.
+        // Các lần chốt nến sau: mã mới khớp là tín hiệu thật → báo như thường.
+        if ([...this.intraTfs()].some((tf) => !before.has(tf))) this.prevByKey = null;
+        this.compute();
       }
-      const data = await fetchAllIntraday(SYMBOLS, at, done,
-        first ? (p) => { this.intraProgress = p; this.renderSoon(); } : null);
-      this.intra = { key, ver: tech.VERSION, at: Date.now(), data };
-      await chrome.storage.local.set({ intra: this.intra });
-      this.intraProgress = Object.keys(data).length / SYMBOLS.length;
-      // Nến 15 phút vừa có lần đầu → cả loạt mã bỗng khớp, không phải "mã mới lọt lọc" → lấy lại mốc so.
-      // Các lần chốt nến sau: mã mới khớp là tín hiệu thật → báo như thường.
-      if (first) this.prevByKey = null;
-      this.compute();
     } catch (e) {
       console.warn('intra', e);
     } finally {
@@ -270,7 +292,7 @@ class App {
     const id = this.intraData();
     const now = Date.now();
     const rows = this.quotes.map((q) => core.transformQuote(q, data[q.Symbol], td[q.Symbol], now,
-      id[q.Symbol] && Object.keys(id[q.Symbol]).length ? { '15m': id[q.Symbol] } : null));
+      id[q.Symbol] || null));
     const all = core.groupByExchange(rows);
     const sort = { sortColumn: this.cfg.sortColumn, sortDirection: this.cfg.sortDirection };
 
@@ -404,7 +426,7 @@ class App {
   }
 
   intraNote() {
-    return `đang tải nến 15 phút ${Math.floor(this.intraProgress * 100)}%`;
+    return `đang tải nến trong phiên ${Math.floor(this.intraProgress * 100)}%`;
   }
 
   // Các dòng "đang tính / đang tải…" của số liệu mà tiêu chí đang cần ('' = đủ cả)
@@ -480,7 +502,8 @@ class App {
     }
     if (this.cfg.criteria.some(core.needsIntraday)) {
       bits.push(this.intraProgress < 1 ? this.intraNote()
-        : `nến 15 phút: cập nhật ${new Date(this.intra.at).toLocaleTimeString('vi-VN', { hour12: false })}`);
+        : `nến trong phiên: cập nhật ${new Date(Math.max(0, ...Object.values(this.intra).map((c) => c.at || 0)))
+          .toLocaleTimeString('vi-VN', { hour12: false })}`);
     }
     if (this.error) bits.push('lỗi: ' + this.error);
     $('status').textContent = bits.join('   ·   ');
@@ -565,7 +588,7 @@ class App {
     if (reload) this.settings.load();
     this.lastTechCheck = 0;          // vừa thêm điều kiện cần chỉ báo kỹ thuật → bắt đầu tải ngay
     this.loadTech();
-    this.lastIntraTry = 0;
+    this.lastIntraTry = {};
     this.loadIntra();
   }
 

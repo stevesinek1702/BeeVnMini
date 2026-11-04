@@ -7,7 +7,7 @@ import { fsum, fmean, isum, imean, pyRoundTo } from './pyfloat.js';
 export const PRICE_AVG_N = [4, 5, 9, 10, 14, 15, 19, 20, 44, 45, 49, 50, 99, 100, 199, 200];
 export const VOL_AVG_N = [4, 5, 9, 10, 14, 19, 20, 44];
 export const EMA_N = [5, 10, 15, 20, 45, 50, 100, 200];
-export const VERSION = 8;        // cùng số với tech.VERSION của Python: đổi khi thêm số thống kê mới → bộ đệm cũ bị bỏ
+export const VERSION = 9;        // cùng số với tech.VERSION của Python: đổi khi thêm số thống kê mới → bộ đệm cũ bị bỏ
 export const PERIODS = { '1w': ['d', 7], '2w': ['d', 14], '1m': ['m', 1], '3m': ['m', 3], '6m': ['m', 6], '1y': ['m', 12] };
 export const MIN_BARS = 20;
 
@@ -27,6 +27,10 @@ export const RSI_SIGNAL_N = 14, RSI_KEEP = 30;
 export const INTRA_MIN = 15;
 export const INTRA_SESSIONS = [[9 * 60, 11 * 60 + 30], [13 * 60, 15 * 60]];
 export const INTRA_MIN_BARS = 60;     // mã ít khớp lệnh thì nến thưa, RSI 15 phút vô nghĩa → không tính
+// Khung trong phiên: khung → [nến nguồn tải về (phút), số phút mỗi nến]. Máy chủ chỉ có nến 15 / 60 phút: 30 phút gộp từ
+// nến 15 phút, 2 / 4 giờ gộp từ nến 1 giờ, tính từ 9:00 như TradingView (4 giờ = 1 nến buổi sáng + 1 nến buổi chiều).
+export const INTRA_TFS = { '15m': [15, 15], '30m': [15, 30], '1h': [60, 60], '2h': [60, 120], '4h': [60, 240] };
+export const INTRA_FEED_DAYS = { 15: 30, 60: 90 };      // số ngày lịch tải về cho mỗi loại nến nguồn
 // Chỉ báo bổ sung (xem tech.py): Parabolic SAR như ta.sar của TradingView; Stochastic chậm (14, 3, 3), Williams %R;
 // CCI (20); ADX / DMI (14) như ta.dmi; OBV + TB 20 phiên; Ichimoku (9, 26, 52), mây dời tới 25 phiên.
 export const SAR_STEP = 0.02, SAR_MAX = 0.2;
@@ -383,24 +387,18 @@ function round6(v) {
   return v;
 }
 
-// Toàn bộ số thống kê của 1 mã (null nếu quá ít nến). history=true: thêm quét lùi phiên vượt trendline giảm.
-export function statsFromBars(bars, today, dateOf, history = false) {
-  const rows = closedBars(bars, today, dateOf);
-  if (rows.length < MIN_BARS) return null;
-  const dates = rows.map((r) => r[0]);
+// Số thống kê chỉ đếm theo số nến (MA, RSI, MACD, Bollinger, MFI, Stochastic, CCI, ADX, SAR, OBV, Ichimoku…) — dùng chung
+// cho nến ngày (statsFromBars) và nến trong phiên (intradayStats). Chưa làm tròn. Xem indicator_stats của tech.py.
+export function indicatorStats(rows) {
   const closes = rows.map((r) => r[4]);
   const vols = rows.map((r) => r[5]);
   const n = rows.length;
   const last = rows[n - 1];
-  const out = { n, ld: dates[n - 1], lc: closes[n - 1], lh: last[2], ll: last[3] };
+  const out = { n, lc: closes[n - 1], lh: last[2], ll: last[3] };
 
   for (const k of PRICE_AVG_N) out[`p${k}`] = n >= k ? fmean(closes.slice(-k)) : null;
   for (const k of VOL_AVG_N) out[`v${k}`] = imean(vols.slice(-k));
   for (const k of [50, 100]) out[`v${k}`] = n >= k ? imean(vols.slice(-k)) : null;
-  out.gv20 = fmean(rows.slice(-20).map((r) => r[4] * r[5])) / 1e6;      // GTTB 20 phiên, tỷ đồng (giá nghìn đồng)
-  const since3m = minusPeriod(today, 'm', 3);
-  const v3m = vols.filter((_, i) => dates[i] >= since3m);
-  out.v3m = v3m.length ? imean(v3m) : null;
   out.sd19 = std(closes.slice(-19));
   out.sd20 = std(closes.slice(-20));
 
@@ -467,6 +465,48 @@ export function statsFromBars(bars, today, dateOf, history = false) {
   }
   out.ca = ichimokuLead(rows, n - ICHI_SHIFT);
   out.cb = ichimokuLead(rows, n - 1 - ICHI_SHIFT);
+  return out;
+}
+
+// Thứ Hai của tuần chứa ngày 'YYYY-MM-DD'
+export function weekStart(day) {
+  const ms = Date.parse(day + 'T00:00:00Z');
+  return new Date(ms - ((new Date(ms).getUTCDay() + 6) % 7) * DAY_MS).toISOString().slice(0, 10);
+}
+
+// Nến tuần gộp từ nến ngày → [indicatorStats các tuần đã đóng hoặc null, [cao, thấp, KL] các phiên đã đóng của tuần này
+// hoặc null] (xem weekly_parts của tech.py)
+export function weeklyParts(rows, today) {
+  const cur = weekStart(today);
+  const weeks = [];
+  let part = null;
+  for (const [d, o, h, lo, c, v] of rows) {
+    if (d >= cur) {
+      part = part === null ? [h, lo, v] : [Math.max(part[0], h), Math.min(part[1], lo), part[2] + v];
+      continue;
+    }
+    const ws = weekStart(d), w = weeks[weeks.length - 1];
+    if (w && w[0] === ws) weeks[weeks.length - 1] = [ws, w[1], Math.max(w[2], h), Math.min(w[3], lo), c, w[5] + v];
+    else weeks.push([ws, o, h, lo, c, v]);
+  }
+  return [weeks.length >= MIN_BARS ? indicatorStats(weeks) : null, part];
+}
+
+// Toàn bộ số thống kê của 1 mã (null nếu quá ít nến). history=true: thêm quét lùi phiên vượt trendline giảm.
+export function statsFromBars(bars, today, dateOf, history = false) {
+  const rows = closedBars(bars, today, dateOf);
+  if (rows.length < MIN_BARS) return null;
+  const out = indicatorStats(rows);
+  const dates = rows.map((r) => r[0]);
+  const closes = rows.map((r) => r[4]);
+  const vols = rows.map((r) => r[5]);
+  const n = rows.length;
+  out.ld = dates[n - 1];
+  [out.w, out.wk] = weeklyParts(rows, today);
+  out.gv20 = fmean(rows.slice(-20).map((r) => r[4] * r[5])) / 1e6;      // GTTB 20 phiên, tỷ đồng (giá nghìn đồng)
+  const since3m = minusPeriod(today, 'm', 3);
+  const v3m = vols.filter((_, i) => dates[i] >= since3m);
+  out.v3m = v3m.length ? imean(v3m) : null;
 
   for (const [key, [kind, k]] of Object.entries(PERIODS)) {
     const since = minusPeriod(today, kind, k);
@@ -491,42 +531,60 @@ export function statsFromBars(bars, today, dateOf, history = false) {
   return round6(out);
 }
 
-// ── Nến 15 phút ─────────────────────────────────────────────────────────
+// ── Nến trong phiên ─────────────────────────────────────────────────────
 
-// [ngày 'YYYY-MM-DD' giờ VN, mốc (phút trong ngày), đang trong buổi khớp lệnh?]. Trong buổi: giờ mở nến đang chạy;
-// ngoài giờ: giờ hết buổi vừa xong (11:30 / 15:00; trước giờ mở cửa, cuối tuần: 0).
-function intradaySlot(nowMs) {
+// [ngày 'YYYY-MM-DD' giờ VN, mốc (phút trong ngày), đang trong buổi khớp lệnh?]. Trong buổi: giờ mở nến `minutes` phút
+// đang chạy (nến tính từ 9:00); ngoài giờ: giờ hết buổi vừa xong (11:30 / 15:00; trước giờ mở cửa, cuối tuần: 0).
+function intradaySlot(nowMs, minutes) {
   const d = new Date(nowMs + VN_MS);
   const date = d.toISOString().slice(0, 10);
   const wd = d.getUTCDay();
   const weekday = wd !== 0 && wd !== 6;
   const m = d.getUTCHours() * 60 + d.getUTCMinutes();
-  if (weekday) for (const [a, b] of INTRA_SESSIONS) if (a <= m && m < b) return [date, m - m % INTRA_MIN, true];
+  if (weekday) {
+    for (const [a, b] of INTRA_SESSIONS) if (a <= m && m < b) return [date, m - (m - INTRA_SESSIONS[0][0]) % minutes, true];
+  }
   const ends = weekday ? INTRA_SESSIONS.map(([, b]) => b).filter((b) => b <= m) : [];
   return [date, ends.length ? ends[ends.length - 1] : 0, false];
 }
 
-// Giờ mở nến 15 phút đang chạy lúc nowMs (giây Unix): nến từ giờ này trở đi chưa chốt.
+// Giờ mở nến `minutes` phút đang chạy lúc nowMs (giây Unix): nến từ giờ này trở đi chưa chốt.
 // null = ngoài giờ khớp lệnh (nghỉ trưa, sau giờ, trước giờ mở cửa, cuối tuần) — mọi nến đã chốt.
-export function intradayCutoff(nowMs) {
-  const [date, m, open] = intradaySlot(nowMs);
+export function intradayCutoff(nowMs, minutes = INTRA_MIN) {
+  const [date, m, open] = intradaySlot(nowMs, minutes);
   return open ? (Date.parse(date + 'T00:00:00Z') - VN_MS) / 1000 + m * 60 : null;
 }
 
-// Mốc của bộ nến 15 phút dùng được lúc nowMs, vd '2026-10-29 09:00'. Sang mốc mới = vừa có nến chốt → tải lại.
-export function intradayKey(nowMs) {
-  const [date, m] = intradaySlot(nowMs);
+// Mốc của bộ nến `minutes` phút dùng được lúc nowMs, vd '2026-10-29 09:00'. Sang mốc mới = vừa có nến chốt → tải lại.
+export function intradayKey(nowMs, minutes = INTRA_MIN) {
+  const [date, m] = intradaySlot(nowMs, minutes);
   return `${date} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 }
 
-// Số thống kê khung 15 phút của 1 mã tại nến đã chốt gần nhất — nến có giờ mở < cutoff (giây Unix; null = mọi nến).
-// null nếu quá ít nến.
-export function intradayStats(bars, cutoff = null) {
-  const rows = closedBars(bars, cutoff === null ? Infinity : cutoff, (t) => t);     // 'ngày' ở đây là giây Unix
+// Gộp nến [giờ mở giây Unix, mở, cao, thấp, đóng, KL] liền nhau thành nến `minutes` phút tính từ 9:00 giờ VN
+export function mergeBars(rows, minutes) {
+  const out = [];
+  for (const [t, o, h, lo, c, v] of rows) {
+    const m = Math.floor(((t + VN_MS / 1000) % 86400) / 60);
+    const start = t - ((((m - INTRA_SESSIONS[0][0]) % minutes) + minutes) % minutes) * 60;
+    const b = out[out.length - 1];
+    if (b && b[0] === start) out[out.length - 1] = [start, b[1], Math.max(b[2], h), Math.min(b[3], lo), c, b[5] + v];
+    else out.push([start, o, h, lo, c, v]);
+  }
+  return out;
+}
+
+// Số thống kê khung trong phiên của 1 mã, xét tại nến đã chốt gần nhất — nến có giờ mở < cutoff (giây Unix; null = mọi
+// nến); minutes: gộp nến nguồn thành nến dài hơn. indicatorStats tính tới nến TRƯỚC đó; nến đã chốt gần nhất nằm ở
+// bar = [giờ mở, cao, thấp, đóng, KL] (đóng vai "phiên hôm nay"). null nếu quá ít nến. Xem intraday_stats của tech.py.
+export function intradayStats(bars, cutoff = null, minutes = null) {
+  let rows = closedBars(bars, cutoff === null ? Infinity : cutoff, (t) => t);     // 'ngày' ở đây là giây Unix
+  if (minutes) rows = mergeBars(rows, minutes);
   if (rows.length < INTRA_MIN_BARS) return null;
-  const closes = rows.map((r) => r[4]);
-  return round6({ n: rows.length, lt: rows[rows.length - 1][0], lc: closes[closes.length - 1],
-    p10: fmean(closes.slice(-10)), rs: rsiTail(closes).map((x) => pyRoundTo(x, 4)) });
+  const out = indicatorStats(rows.slice(0, -1));
+  const [t, , h, lo, c, v] = rows[rows.length - 1];
+  out.bar = [t, h, lo, c, v];
+  return round6(out);
 }
 
 // ── Khối lượng dự kiến cả phiên (cách FireAnt đổi giờ hiện tại → số phút đã giao dịch) ──

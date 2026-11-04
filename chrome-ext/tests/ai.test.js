@@ -16,15 +16,18 @@ test('câu lệnh gửi AI có đủ danh mục cột và tín hiệu', () => {
   for (const [k] of core.FILTERABLE) assert.ok(p.includes(`\n${k} | `), k);
   for (const k of cond.METRIC_KEYS) assert.ok(p.includes(`\n${k} | `), k);
   for (const s of cond.SIGNAL_LIST) assert.ok(p.includes(`\n${s.id} | `), s.id);
-  assert.ok(p.includes('tf: một trong "15m", "D"'));
-  assert.ok(p.length < 40000);
+  assert.ok(p.includes('tf: khung nến (xem luật "Khung nến"; mặc định "15m")'));       // RSI tạo đáy
+  assert.ok(p.includes('tf: khung nến (xem luật "Khung nến"; mặc định "D")'));         // các tín hiệu chỉ báo khác
+  assert.ok(p.includes('"15m" (15 phút), "30m" (30 phút), "1h" (1 giờ), "2h" (2 giờ), "4h" (4 giờ), "D" (ngày), "W" (tuần)'));
+  assert.ok(p.includes('\nrsi14@1h | RSI(14) hiện tại · khung 1 giờ | '));
+  assert.ok(p.length < 40000, p.length);
 });
 
 test('đọc câu trả lời của AI', () => {
   const r = ai.parseReply('```json\n' + JSON.stringify(EXAMPLE) + '\n```');
   assert.deepEqual(r.crit, {
     name: EXAMPLE.name, exchange: 'HSX', alert: 'speak', filters: EXAMPLE.filters,
-    signals: [{ id: 'PriceAboveSMA', params: { period: 20 } }],
+    signals: [{ id: 'PriceAboveSMA', params: { tf: 'D', period: 20 } }],
   });
   assert.deepEqual([r.issues, r.unsupported, r.note], [[], [], 'ok']);
   assert.equal(core.describeFilters(r.crit.filters, r.crit.signals),
@@ -35,7 +38,7 @@ test('AI trả sai thì bỏ phần sai, báo rõ', () => {
   const r = ai.parseReply(JSON.stringify({
     exchange: 'NYSE',
     filters: { pe: { operator: 'lt', value: 10 }, price: { operator: 'bt', value: 10 }, value: { operator: 'ge', value: '5,5' } },
-    signals: [{ id: 'Khong' }, { id: 'RSIBottom', params: { tf: '4h' } }, { id: 'RSIBottom', params: { tf: '4h' } }],
+    signals: [{ id: 'Khong' }, { id: 'RSIBottom', params: { tf: '3h' } }, { id: 'RSIBottom', params: { tf: '3h' } }],
     unsupported: ['P/E dưới 10'],
   }));
   assert.equal(r.crit.exchange, 'ALL');
@@ -58,7 +61,7 @@ test('đọc lời gọi hàm (dạng mảng) — đúng câu trả lời thật
   assert.deepEqual(r.crit.filters, {
     price: { operator: 'gt', value: 10 }, avgVol20: { operator: 'gt', value: 200000 }, volVs50: { operator: 'ge', value: 80 },
     fromHigh1y: { operator: 'le', value: 35 }, value: { operator: 'bt', value: 5, value2: 50 }, volume: { operator: 'gt', value: 200000 } });
-  assert.deepEqual(r.crit.signals, [{ id: 'PriceAboveSMA', params: { period: 50 } }, { id: 'RSIBottom', params: { tf: 'D', level: 30, look: 16 } }]);
+  assert.deepEqual(r.crit.signals, [{ id: 'PriceAboveSMA', params: { tf: 'D', period: 50 } }, { id: 'RSIBottom', params: { tf: 'D', level: 30, look: 16 } }]);
   assert.equal(r.crit.exchange, 'HSX');
   assert.deepEqual(r.issues, []);
 });
@@ -147,7 +150,7 @@ test('gọi Muse / DeepSeek / Gemini / máy chủ khác bằng tool (fetch giả
     [200, toolReply({ name: 'm', exchange: 'ALL', filters: [], signals: [{ id: 'MACDCrossUpSignal' }] })],
     [200, toolReply({ name: 'm', exchange: 'ALL', filters: [], signals: [{ id: 'MACDCrossAboveSignalLine' }] })]], seen));
   assert.deepEqual([r.via, r.rounds, r.unknown], ['tool', 2, []]);
-  assert.deepEqual(r.crit.signals, [{ id: 'MACDCrossAboveSignalLine', params: {} }]);
+  assert.deepEqual(r.crit.signals, [{ id: 'MACDCrossAboveSignalLine', params: { tf: 'D' } }]);
   const m2 = seen[1].init.body.messages;
   assert.deepEqual(m2.slice(2).map((x) => x.role), ['assistant', 'tool']);
   assert.equal(m2[2].tool_calls[0].function.name, 'tao_tieu_chi_loc');

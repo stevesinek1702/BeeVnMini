@@ -22,11 +22,12 @@ Mỗi lần mở lại Chrome phải bấm **Mở cửa sổ nổi** một lần
 |---|---|
 | Đặt / đổi bộ lọc | Phần **⚙ Bộ lọc** bên phải tab (trên cửa sổ nổi bấm ⚙ để nhảy về tab). **Không cần bấm Lưu**: sửa gì bảng giá lọc theo ngay (dòng trạng thái báo *✓ Đã áp dụng*). Dòng điều kiện chưa có số thì viền vàng *← gõ số để lọc* — chỉ dòng đó chưa dùng, các dòng / tiêu chí khác vẫn lọc; thẻ tiêu chí có ⚠ là còn dòng như vậy |
 | Thêm tiêu chí thứ 2, 3… | Hàng thẻ trên cùng: **＋ Tiêu chí** (hoặc **📋 Mẫu**). Mỗi thẻ = 1 khối trên bảng giá, số nhỏ trên thẻ là số điều kiện; bấm thẻ để sửa, **🗑 Xoá tiêu chí** để bỏ |
-| Thêm điều kiện | Ô **🔍 Tìm điều kiện** (gõ không dấu cũng được: `rsi`, `kltb 50`, `cach dinh`, `sar`, `may`…) hoặc bấm nhóm → bấm điều kiện. Điều kiện vào danh sách phía trên; **sửa số / tham số ngay trong dòng** (vd đổi SMA(20) thành SMA(50)), ✕ để bỏ. Cột bảng giá (Giá, KLGD, GTGD, MA…) nằm trong nhóm *Cột bảng giá*. 45 cột số + 79 tín hiệu y như bản Python |
+| Thêm điều kiện | Ô **🔍 Tìm điều kiện** (gõ không dấu cũng được: `rsi`, `kltb 50`, `cach dinh`, `sar`, `may`…) hoặc bấm nhóm → bấm điều kiện. Điều kiện vào danh sách phía trên; **sửa số / tham số ngay trong dòng** (vd đổi SMA(20) thành SMA(50)), ✕ để bỏ. Cột bảng giá (Giá, KLGD, GTGD, MA…) nằm trong nhóm *Cột bảng giá*. 93 cột số (48 trong đó là cột theo khung) + 79 tín hiệu y như bản Python |
 | ✨ Tạo tiêu chí bằng AI | Gõ tiêu chí như nói chuyện, vd *giá trên 10k, KLTB 50 phiên > 100 nghìn, cách đỉnh 1 năm dưới 35%, giá trên MA20* → **✨ Tạo tiêu chí** (Ctrl + Enter) → xem các điều kiện AI hiểu (ý nào không lọc được thì ghi rõ) → **＋ Đưa lên bảng giá** (thành thẻ tiêu chí mới; thẻ đang xem còn trống thì thay luôn vào đó). Cần khoá API: **🤖 Cài đặt AI** → chọn **Muse (botai.id.vn)** (mặc định, model `muse-chat`) / DeepSeek / Google Gemini / Khác (máy chủ tương thích OpenAI, vd web riêng sau này) → dán khoá. AI được buộc **gọi hàm** `tao_tieu_chi_loc` (tool / function calling, danh sách mã cột / tín hiệu hợp lệ ghi sẵn trong khuôn); AI dùng mã không có thì extension báo lại lỗi để AI gọi lại 1 lần; hãng không nhận tools thì tự lùi về JSON. Muse mất ~20 giây – 1 phút mỗi lần. Khoá chỉ lưu trong Chrome máy đó, chỉ gửi tới máy chủ AI đã chọn; lần đầu Chrome hỏi cho phép gọi máy chủ AI |
 | Tiêu chí mẫu | **📋 Mẫu**: cổ phiếu khoẻ sát đỉnh, pullback MA20, vượt đỉnh 3 tháng + KL lớn, RSI tạo đáy 15 phút, bắt đáy quá bán, xu hướng tăng mạnh (ADX + SAR + Ichimoku), nền chặt sát đỉnh, vượt trendline giảm, dòng tiền vào, khối ngoại mua ròng — bấm là thêm thành tiêu chí mới, sửa tiếp được |
 | Chỉ báo | RSI, MFI, Stochastic (14,3,3), Williams %R, CCI (20), MACD, Bollinger, ADX / DMI (14), Parabolic SAR (y `ta.sar` của TradingView), Ichimoku (9,26,52), OBV, SMA / EMA 5…200, pullback / trendline. Cột số: giá trị các chỉ báo, % cách đỉnh / đáy 1 tháng … 1 năm, KLTB 50 / 100 phiên, GTTB 20 phiên, **KL hôm nay so với KLTB 20 / 50 phiên (%)** (vd "KL ≥ 80% TB 50 phiên" → KL/TB50 ≥ 80; KL hôm nay = KL dự kiến cả phiên) |
-| RSI tạo đáy (khung 15 phút hoặc ngày) | Nhóm **RSI (14)** → *RSI tạo đáy khung …* → chọn **khung** `15 phút` / `ngày`, ngưỡng quá bán (30), đáy trong (16 nến). Khớp khi đủ 3 dấu hiệu: trong 16 nến gần nhất RSI(14) từng ≤ 30 và nay đã thoát lên trên 30, RSI trên đường Signal (WMA14 của RSI), giá đóng cửa trên MA10. Khung **15 phút** xét nến **đã chốt** gần nhất, tự tải nến 15 phút cả thị trường ~20 giây sau mỗi lần chốt nến (~30 giây/lượt), nên danh sách đổi mỗi 15 phút; mã dưới 60 nến trong 3 tuần không tính. Khung **ngày** ghép giá hiện tại như các điều kiện khác |
+| Khung 15 phút / 30 phút / 1 giờ / 2 giờ / 4 giờ / ngày / tuần | Mọi tín hiệu chỉ báo (MA, RSI, MFI, Stochastic, Williams %R & CCI, Bollinger, MACD, ADX / DMI, SAR, Ichimoku, khối lượng & OBV) có ô **khung** trong dòng (mặc định `ngày`), vd *MACD cắt lên đường tín hiệu · khung 1 giờ*. Khung **trong phiên** xét nến **đã chốt** gần nhất, tự tải nến cả thị trường ~20 giây sau mỗi lần chốt nến (~40 giây/lượt), nên danh sách đổi theo nhịp nến; mã dưới 60 nến không tính. 30 phút gộp từ nến 15 phút, 2 / 4 giờ gộp từ nến 1 giờ, tính từ 9:00 như TradingView. Khung **ngày / tuần** ghép giá hiện tại. Nhóm Giá (đỉnh / đáy theo tháng) và Pullback & trendline chỉ có khung ngày. Cột số theo khung: RSI / MFI / Stoch %K / %R / CCI / ADX / ATR % / độ rộng Bollinger · khung … |
+| RSI tạo đáy | Nhóm **RSI (14)** → *RSI tạo đáy khung …* → chọn **khung** (mặc định `15 phút`), ngưỡng quá bán (30), đáy trong (16 nến). Khớp khi đủ 3 dấu hiệu: trong 16 nến gần nhất RSI(14) từng ≤ 30 và nay đã thoát lên trên 30, RSI trên đường Signal (WMA14 của RSI), giá đóng cửa trên MA10 |
 | Pullback & trendline | Nhóm **Pullback & trendline**: pullback / bật lên từ SMA 10-20-50 và trendline tăng 3T/6T; vượt trendline giảm; pullback / bật lên sau vượt; cột **Vượt TL 3T/6T** (vd *Đến ≤ 5* = vượt trong tuần), **Giá vượt**, **% từ vượt**, **↕SMA20/50**. Luật kẻ trendline y bản Python |
 | Khi có mã mới | Ô *Khi có mã mới* của từng tiêu chí: **Đọc tên mã** (giọng Windows "Microsoft An") / **Kêu "ting"** / **Im lặng**; nút **Nghe thử**. Mã mới sáng vàng 6 giây |
 | ★ Theo dõi | Ô **★ Theo dõi** (gõ `VIB MBB HPG`) → khối riêng cuối bảng. Hoặc **chuột phải lên một mã** trên bảng → ★ Theo dõi / ✕ Bỏ theo dõi |
@@ -39,8 +40,8 @@ Mỗi lần mở lại Chrome phải bấm **Mở cửa sổ nổi** một lần
 
 Giá tự lấy **30 giây/lần** trong giờ giao dịch (8:45–15:15, thứ 2–6), ngoài giờ 10 phút/lần. MA / KL trung bình tự
 tính từ nến ngày mỗi ngày một lần (~30 giây). Chỉ báo kỹ thuật + trendline chỉ tải khi có tiêu chí cần
-(~1 phút cho cả thị trường, tính ở luồng phụ nên bảng không đơ), lưu lại dùng cả ngày. Nến 15 phút chỉ tải khi có
-tiêu chí khung 15 phút, sau mỗi lần chốt nến (nghỉ trưa, ngoài giờ thì đứng yên).
+(~1 phút cho cả thị trường, tính ở luồng phụ nên bảng không đơ), lưu lại dùng cả ngày. Nến trong phiên (15 phút / 1 giờ)
+chỉ tải loại nến mà tiêu chí dùng đến, sau mỗi lần chốt nến (nghỉ trưa, ngoài giờ thì đứng yên); khung tuần gộp từ nến ngày.
 
 ## Khác bản Python
 
@@ -60,11 +61,11 @@ tiêu chí khung 15 phút, sau mỗi lần chốt nến (nghỉ trưa, ngoài gi
 | `app.js` | Trang chính: vòng lấy dữ liệu, lọc, báo mã mới, cửa sổ nổi |
 | `view.js` | Vẽ bảng (dựng khung một lần, các lượt sau chỉ đổi chữ trong ô → không nháy) |
 | `settings.js` | Cài đặt bộ lọc |
-| `data.js`, `techworker.js` | Lấy giá, nến ngày và nến 15 phút; luồng phụ tính chỉ báo |
+| `data.js`, `techworker.js` | Lấy giá, nến ngày và nến trong phiên (15 / 60 phút); luồng phụ tính chỉ báo |
 | `sw.js` | Hẹn giờ 30 giây (`chrome.alarms`), nút trên thanh công cụ |
 | `icons/` | Logo con ong / tổ ong (`logo.svg`, bản rút gọn `logo-small.svg`, icon PNG 16–128; vẽ lại bằng `ve-logo.py`) |
 | `lib/ai.js` | Tạo tiêu chí bằng AI: câu lệnh gửi AI (sinh từ danh mục điều kiện), gọi DeepSeek / Gemini / máy chủ tương thích OpenAI, kiểm từng điều kiện AI trả về |
-| `tests/` | `node --test` (90 test: chép từ `tests/` của bản Python + test AI / tiêu chí mẫu) |
+| `tests/` | `node --test` (94 test: chép từ `tests/` của bản Python + test AI / tiêu chí mẫu) |
 
 Đã đối chiếu với bản Python 1.7.0 trên nến thật cả thị trường (21–22/10/2026): 1.191.909 con số thống kê
 (gồm trendline, phiên vượt), 25,4 triệu lần đánh giá 42 tín hiệu, 69.312 bộ cột số — **0 sai lệch**;
@@ -75,3 +76,4 @@ RSI tạo đáy (31/10/2026): 11.823 bộ thống kê nến 15 phút (~402 nghì
 Chỉ báo bổ sung (31/10/2026): toàn bộ thống kê nến ngày 1.443 mã, 2,85 triệu lần đánh giá 79 tín hiệu (395 bộ tham số ×
 5 tình huống giá), 289 nghìn giá trị cột số — **0 sai lệch** với bản Python. Bản Python đối chiếu với thư viện `ta` 0.11
 (Stochastic, Williams %R, CCI, ADX, ATR, Ichimoku khớp) và bản chép `ta.sar` của TradingView (59.163 phiên khớp hẳn).
+Đa khung (04/11/2026): 1.443 mã, thống kê nến ngày + nến tuần (475 nghìn con số), nến 15 / 30 phút, 1 / 2 / 4 giờ ở 2 mốc giờ (830 nghìn con số), 2,1 triệu lần đánh giá 1.468 bộ tham số × khung, 130 nghìn giá trị cột số — **0 sai lệch** với bản Python.
