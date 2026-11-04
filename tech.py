@@ -15,7 +15,7 @@ import math
 PRICE_AVG_N = (4, 5, 9, 10, 14, 15, 19, 20, 44, 45, 49, 50, 99, 100, 199, 200)
 VOL_AVG_N = (4, 5, 9, 10, 14, 19, 20, 44)
 EMA_N = (5, 10, 15, 20, 45, 50, 100, 200)
-VERSION = 8        # đổi khi thêm số thống kê mới → bộ nhớ đệm tech.json cũ của hôm nay bị bỏ, tải lại
+VERSION = 9        # đổi khi thêm số thống kê mới → bộ nhớ đệm tech.json cũ của hôm nay bị bỏ, tải lại
 # Các mốc "1 tuần … 1 năm": tính theo lịch (ngày hoặc tháng) lùi từ hôm nay.
 PERIODS = {'1w': ('d', 7), '2w': ('d', 14), '1m': ('m', 1), '3m': ('m', 3), '6m': ('m', 6), '1y': ('m', 12)}
 MIN_BARS = 20      # ít hơn chừng này phiên (mã mới niêm yết) thì chưa tính — thà thiếu còn hơn sai
@@ -45,6 +45,11 @@ RSI_SIGNAL_N, RSI_KEEP = 14, 30
 INTRA_MIN = 15
 INTRA_SESSIONS = ((9 * 60, 11 * 60 + 30), (13 * 60, 15 * 60))
 INTRA_MIN_BARS = 60     # ~4 phiên mã thanh khoản tốt; mã ít khớp lệnh thì nến thưa, RSI 15 phút vô nghĩa → không tính
+# Khung trong phiên: khung → (nến nguồn tải về (phút), số phút mỗi nến). Máy chủ chỉ có nến 15 / 60 phút: 30 phút gộp từ
+# nến 15 phút, 2 / 4 giờ gộp từ nến 1 giờ, tính từ 9:00 như TradingView (4 giờ = 1 nến buổi sáng + 1 nến buổi chiều).
+INTRA_TFS = {'15m': (15, 15), '30m': (15, 30), '1h': (60, 60), '2h': (60, 120), '4h': (60, 240)}
+INTRA_FEED_DAYS = {15: 30, 60: 90}       # số ngày lịch tải về cho mỗi loại nến nguồn (đủ nến cho RSI / MACD / Ichimoku)
+VN_OFFSET = 7 * 3600
 # Chỉ báo bổ sung: Parabolic SAR (0.02, 0.2) kiểu Wilder; Stochastic chậm (14, 3, 3) — Williams %R (14) = %K thô − 100;
 # CCI (20); ADX / DMI (14) như ta.dmi của TradingView (trung bình Wilder); OBV + TB 20 phiên; Ichimoku (9, 26, 52),
 # mây dời tới 25 phiên như TradingView. Như mọi chỉ báo ở đây: tính tới phiên đã đóng, conditions.py ghép phiên hôm nay.
@@ -407,17 +412,13 @@ def _round(v):
     return v
 
 
-def stats_from_bars(bars, today, date_of, history=False):
-    """Toàn bộ số thống kê của 1 mã, tính trên các phiên đã đóng; None nếu quá ít nến.
-    history=True: thêm quét lùi phiên vượt trendline giảm (nặng hơn — chỉ bật khi có tiêu chí dùng)."""
-    rows = closed_bars(bars, today, date_of)
-    if len(rows) < MIN_BARS:
-        return None
-    dates = [r[0] for r in rows]
+def indicator_stats(rows):
+    """Số thống kê chỉ đếm theo số nến (MA, RSI, MACD, Bollinger, MFI, Stochastic, CCI, ADX, SAR, OBV, Ichimoku…) —
+    dùng chung cho nến ngày (stats_from_bars) và nến 15 phút (intraday_stats). Chưa làm tròn."""
     closes = [r[4] for r in rows]
     vols = [r[5] for r in rows]
     n = len(rows)
-    out = {'n': n, 'ld': dates[-1], 'lc': closes[-1], 'lh': rows[-1][2], 'll': rows[-1][3]}
+    out = {'n': n, 'lc': closes[-1], 'lh': rows[-1][2], 'll': rows[-1][3]}
 
     for k in PRICE_AVG_N:
         out[f'p{k}'] = _mean(closes[-k:]) if n >= k else None    # chưa đủ phiên (vd SMA200 mã mới) → không tính
@@ -425,10 +426,6 @@ def stats_from_bars(bars, today, date_of, history=False):
         out[f'v{k}'] = _mean(vols[-k:])
     for k in (50, 100):
         out[f'v{k}'] = _mean(vols[-k:]) if n >= k else None
-    out['gv20'] = _mean([r[4] * r[5] for r in rows[-20:]]) / 1e6       # GTTB 20 phiên, tỷ đồng (giá nghìn đồng)
-    since3m = minus_period(today, 'm', 3)
-    v3m = [v for d, v in zip(dates, vols) if d >= since3m]
-    out['v3m'] = _mean(v3m) if v3m else None
     out['sd19'] = _std(closes[-19:])
     out['sd20'] = _std(closes[-20:])
 
@@ -477,6 +474,51 @@ def stats_from_bars(bars, today, date_of, history=False):
     for k in (ICHI_T - 1, ICHI_K - 1):
         out[f'ih{k}'], out[f'il{k}'] = max(r[2] for r in rows[-k:]), min(r[3] for r in rows[-k:])
     out['ca'], out['cb'] = ichimoku_lead(rows, n - ICHI_SHIFT), ichimoku_lead(rows, n - 1 - ICHI_SHIFT)
+    return out
+
+
+def week_start(day):
+    """Thứ Hai của tuần chứa ngày 'YYYY-MM-DD'."""
+    from datetime import date as _d, timedelta
+    d = _d.fromisoformat(day)
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
+def weekly_parts(rows, today):
+    """Nến tuần gộp từ nến ngày → (indicator_stats các tuần đã đóng hoặc None, [cao, thấp, KL] các phiên đã đóng của tuần
+    này hoặc None). Tuần này (chứa `today`) ghép phiên hôm nay khi xét tín hiệu (conditions.week_live), như nến ngày."""
+    cur = week_start(today)
+    weeks, part = [], None
+    for d, o, h, lo, c, v in rows:
+        if d >= cur:
+            part = [h, lo, v] if part is None else [max(part[0], h), min(part[1], lo), part[2] + v]
+            continue
+        ws = week_start(d)
+        if weeks and weeks[-1][0] == ws:
+            w = weeks[-1]
+            weeks[-1] = (ws, w[1], max(w[2], h), min(w[3], lo), c, w[5] + v)
+        else:
+            weeks.append((ws, o, h, lo, c, v))
+    return (indicator_stats(weeks) if len(weeks) >= MIN_BARS else None), part
+
+
+def stats_from_bars(bars, today, date_of, history=False):
+    """Toàn bộ số thống kê của 1 mã, tính trên các phiên đã đóng; None nếu quá ít nến.
+    history=True: thêm quét lùi phiên vượt trendline giảm (nặng hơn — chỉ bật khi có tiêu chí dùng)."""
+    rows = closed_bars(bars, today, date_of)
+    if len(rows) < MIN_BARS:
+        return None
+    out = indicator_stats(rows)
+    dates = [r[0] for r in rows]
+    closes = [r[4] for r in rows]
+    vols = [r[5] for r in rows]
+    n = len(rows)
+    out['ld'] = dates[-1]
+    out['w'], out['wk'] = weekly_parts(rows, today)
+    out['gv20'] = _mean([r[4] * r[5] for r in rows[-20:]]) / 1e6       # GTTB 20 phiên, tỷ đồng (giá nghìn đồng)
+    since3m = minus_period(today, 'm', 3)
+    v3m = [v for d, v in zip(dates, vols) if d >= since3m]
+    out['v3m'] = _mean(v3m) if v3m else None
 
     # Đỉnh / đáy và giá mốc "1 tuần … 1 năm trước"
     for key, (kind, k) in PERIODS.items():
@@ -503,23 +545,23 @@ def stats_from_bars(bars, today, date_of, history=False):
 
 # ── Nến 15 phút ─────────────────────────────────────────────────────────
 
-def intraday_cutoff(now):
-    """Giờ mở nến 15 phút đang chạy lúc `now` (datetime giờ VN): nến từ giờ này trở đi chưa chốt.
+def intraday_cutoff(now, minutes=INTRA_MIN):
+    """Giờ mở nến `minutes` phút đang chạy lúc `now` (datetime giờ VN; nến tính từ 9:00): nến từ giờ này trở đi chưa chốt.
     None = ngoài giờ khớp lệnh (nghỉ trưa, sau giờ, trước giờ mở cửa, cuối tuần) — mọi nến đã chốt."""
     if now.weekday() >= 5:
         return None
     m = now.hour * 60 + now.minute
     for a, b in INTRA_SESSIONS:
         if a <= m < b:
-            m -= m % INTRA_MIN
+            m -= (m - INTRA_SESSIONS[0][0]) % minutes
             return now.replace(hour=m // 60, minute=m % 60, second=0, microsecond=0)
     return None
 
 
-def intraday_key(now):
-    """Mốc của bộ nến 15 phút dùng được lúc `now`: giờ mở nến đang chạy; ngoài giờ là giờ hết buổi vừa xong
+def intraday_key(now, minutes=INTRA_MIN):
+    """Mốc của bộ nến `minutes` phút dùng được lúc `now`: giờ mở nến đang chạy; ngoài giờ là giờ hết buổi vừa xong
     (11:30 / 15:00; trước giờ mở cửa, cuối tuần: 00:00). Sang mốc mới = vừa có nến chốt → tải lại."""
-    cut = intraday_cutoff(now)
+    cut = intraday_cutoff(now, minutes)
     if cut is None:
         m = now.hour * 60 + now.minute
         ends = [b for _, b in INTRA_SESSIONS if b <= m] if now.weekday() < 5 else []
@@ -528,15 +570,33 @@ def intraday_key(now):
     return cut.strftime('%Y-%m-%d %H:%M')
 
 
-def intraday_stats(bars, cutoff=None):
-    """Số thống kê khung 15 phút của 1 mã tại nến đã chốt gần nhất — nến có giờ mở < cutoff (giây Unix; None = mọi nến).
-    None nếu quá ít nến."""
+def merge_bars(rows, minutes):
+    """Gộp nến (giờ mở giây Unix, mở, cao, thấp, đóng, KL) liền nhau thành nến `minutes` phút tính từ 9:00 giờ VN."""
+    out = []
+    for t, o, h, lo, c, v in rows:
+        start = t - ((t + VN_OFFSET) % 86400 // 60 - INTRA_SESSIONS[0][0]) % minutes * 60
+        if out and out[-1][0] == start:
+            b = out[-1]
+            out[-1] = (start, b[1], max(b[2], h), min(b[3], lo), c, b[5] + v)
+        else:
+            out.append((start, o, h, lo, c, v))
+    return out
+
+
+def intraday_stats(bars, cutoff=None, minutes=None):
+    """Số thống kê khung trong phiên của 1 mã, xét tại nến đã chốt gần nhất — nến có giờ mở < cutoff (giây Unix; None = mọi
+    nến); minutes: gộp nến nguồn thành nến dài hơn (merge_bars). Giống nến ngày: indicator_stats tính tới nến TRƯỚC đó,
+    còn nến đã chốt gần nhất nằm ở 'bar' = [giờ mở, cao, thấp, đóng, KL] và đóng vai "phiên hôm nay" khi xét tín hiệu
+    (conditions.intraday_live). None nếu quá ít nến."""
     rows = closed_bars(bars, math.inf if cutoff is None else cutoff, lambda t: t)     # 'ngày' ở đây là giây Unix
+    if minutes:
+        rows = merge_bars(rows, minutes)
     if len(rows) < INTRA_MIN_BARS:
         return None
-    closes = [r[4] for r in rows]
-    return _round({'n': len(rows), 'lt': rows[-1][0], 'lc': closes[-1], 'p10': _mean(closes[-10:]),
-                   'rs': [round(x, 4) for x in rsi_tail(closes)]})
+    out = indicator_stats(rows[:-1])
+    t, _, h, lo, c, v = rows[-1]
+    out['bar'] = [t, h, lo, c, v]
+    return _round(out)
 
 
 # ── Khối lượng dự kiến cả phiên ─────────────────────────────────────────

@@ -38,7 +38,7 @@ from symbols import SYMBOLS  # noqa: E402
 SYMBOL_SET = set(SYMBOLS)
 APP_NAME = 'Bee.vn mini'
 # Tăng số này mỗi lần phát hành bản mới (tools/release.py đọc nó). BEEVN_FAKE_VERSION chỉ để thử cập nhật.
-APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.8.1'
+APP_VERSION = os.environ.get('BEEVN_FAKE_VERSION') or '1.9.0'
 # Bản mới nhất: nhánh "release" của kho GitHub công khai stevesinek1702/BeeVnMini
 UPDATE_URL = (os.environ.get('BEEVN_UPDATE_URL')     # chỉ để chạy thử
               or 'https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/latest.json')
@@ -48,7 +48,7 @@ DATA_DIR = os.environ.get('BEEVN_DATA_DIR') or os.path.join(os.environ.get('APPD
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 HIST_PATH = os.path.join(DATA_DIR, 'hist.json')
 TECH_PATH = os.path.join(DATA_DIR, 'tech.json')      # thống kê kỹ thuật từ nến ngày, mỗi ngày tải 1 lần
-INTRA_PATH = os.path.join(DATA_DIR, 'intra.json')    # thống kê nến 15 phút, tải lại sau mỗi lần chốt nến
+INTRA_PATH = os.path.join(DATA_DIR, 'intra.json')    # thống kê nến trong phiên, tải lại sau mỗi lần chốt nến
 LOG_PATH = os.path.join(DATA_DIR, 'log.txt')
 ICON_PATH = os.path.join(RES_DIR, 'beevn.ico')
 SPEAK_PS = os.path.join(RES_DIR, 'speak.ps1')
@@ -62,8 +62,8 @@ ALERT_LABEL = [('speak', 'Đọc tên mã'), ('beep', 'Kêu "ting"'), ('off', 'I
 ON_HOURS_SEC = 30
 OFF_HOURS_SEC = 600
 HIST_CHECK_SEC = 600
-INTRA_DELAY_SEC = 20     # chốt nến 15 phút xong chờ chừng này giây mới tải, cho dchart kịp ghi nến vừa chốt
-INTRA_KEEP_SEC = 1200    # bộ nến 15 phút của mốc trước vẫn dùng trong lúc đang tải mốc mới (~30 s)
+INTRA_DELAY_SEC = 20     # chốt nến xong chờ chừng này giây mới tải, cho dchart kịp ghi nến vừa chốt
+INTRA_KEEP_SEC = 300     # bộ nến của mốc trước vẫn dùng thêm chừng này giây sau 1 nến, trong lúc đang tải mốc mới
 STALE_SEC = 120
 MAX_ROWS = 25            # 1 tiêu chí: quá số hàng này thì lăn chuột để xem tiếp
 SECTION_ROWS = 8         # nhiều tiêu chí: mỗi khối mặc định hiện chừng này hàng (＋/－ để đổi)
@@ -247,7 +247,7 @@ class App:
         self.hist_progress = 1.0 if self.hist.get('day') == core.vn_date(time.time()) else 0.0
         self.tech = load_json(TECH_PATH, {})     # thống kê kỹ thuật (RSI, MACD, SMA, đỉnh đáy…) — chỉ tải khi có tiêu chí cần
         self.tech_progress = 1.0 if self.tech_fresh(core.vn_date(time.time())) else 0.0
-        self.intra = load_json(INTRA_PATH, {})   # thống kê nến 15 phút — chỉ tải khi có tiêu chí dùng khung 15 phút
+        self.intra = load_json(INTRA_PATH, {})   # {loại nến nguồn: bộ thống kê} — chỉ tải khi có tiêu chí dùng khung trong phiên
         self.intra_progress = 1.0 if self.intra_data() else 0.0
         self.stat_note = None   # lý do không dùng được FireAnt cho cột MA (vd cookie hết hạn)
         self.prev_by_key = None      # {khoá tiêu chí: tập mã lượt trước} — để biết mã nào MỚI lọt lọc
@@ -414,8 +414,7 @@ class App:
         data = self.hist.get('data', {})
         tech = self.tech_data()
         intra = self.intra_data()
-        rows = [core.transform_quote(q, data.get(q.get('Symbol')), tech.get(q.get('Symbol')),
-                                     intra={'15m': intra[q.get('Symbol')]} if intra.get(q.get('Symbol')) else None)
+        rows = [core.transform_quote(q, data.get(q.get('Symbol')), tech.get(q.get('Symbol')), intra=intra.get(q.get('Symbol')))
                 for q in self.quotes]
         all_stocks = core.group_by_exchange(rows)
         sort = {'sortColumn': self.cfg.get('sortColumn'), 'sortDirection': self.cfg.get('sortDirection')}
@@ -508,16 +507,23 @@ class App:
         return self.tech.get('data', {}) if self.tech_fresh(core.vn_date(time.time())) else {}
 
     def intra_data(self):
-        """Thống kê nến 15 phút của mốc hiện tại; vừa sang mốc mới mà đang tải dở thì tạm dùng bộ của mốc trước.
-        Bộ cũ hơn (máy ngủ, mất mạng lâu) thì bỏ — tín hiệu sẽ sai."""
-        i = self.intra
-        if i.get('ver') == tech.VERSION and (i.get('key') == tech.intraday_key(core.vn_now())
-                                             or time.time() - i.get('at', 0) < INTRA_KEEP_SEC):
-            return i.get('data', {})
-        return {}
+        """{mã: {khung: thống kê nến trong phiên}} gộp từ các loại nến nguồn (self.intra = {'15' | '60': bộ đã tải}) còn
+        dùng được: cùng mốc hiện tại, hoặc vừa sang mốc mới mà đang tải dở (chưa quá 1 nến + INTRA_KEEP_SEC). Bộ cũ hơn
+        (máy ngủ, mất mạng lâu) thì bỏ — tín hiệu sẽ sai."""
+        now, out = core.vn_now(), {}
+        for feed, c in self.intra.items():
+            if not (isinstance(c, dict) and c.get('ver') == tech.VERSION and feed.isdigit()):
+                continue
+            if c.get('key') != tech.intraday_key(now, int(feed)) and time.time() - c.get('at', 0) >= int(feed) * 60 + INTRA_KEEP_SEC:
+                continue
+            for sym, d in c.get('data', {}).items():
+                tfs = {tf: s for tf, s in (d or {}).items() if s}
+                if tfs:
+                    out.setdefault(sym, {}).update(tfs)
+        return out
 
     def tech_pending(self):
-        """Có tiêu chí cần chỉ báo kỹ thuật / nến 15 phút mà số liệu chưa tải xong."""
+        """Có tiêu chí cần chỉ báo kỹ thuật / nến trong phiên mà số liệu chưa tải xong."""
         crits = self.cfg['criteria']
         return ((self.tech_progress < 1 and any(core.needs_tech(c) for c in crits))
                 or (self.intra_progress < 1 and any(core.needs_intraday(c) for c in crits)))
@@ -528,7 +534,7 @@ class App:
         if self.tech_progress < 1 and any(core.needs_tech(c) for c in crits):
             notes.append(f'đang tính chỉ báo kỹ thuật {int(self.tech_progress * 100)}%')
         if self.intra_progress < 1 and any(core.needs_intraday(c) for c in crits):
-            notes.append(f'đang tải nến 15 phút {int(self.intra_progress * 100)}%')
+            notes.append(f'đang tải nến trong phiên {int(self.intra_progress * 100)}%')
         return ' · '.join(notes)
 
     def ma_source_note(self):
@@ -1020,23 +1026,30 @@ class App:
             self.wake_tech.clear()
 
     def intra_loop(self):
-        """Nến 15 phút cả thị trường (~30 s) cho tín hiệu khung 15 phút: tải lại ngay sau mỗi lần chốt nến (mốc
-        tech.intraday_key đổi; nghỉ trưa / ngoài giờ thì đứng yên), chỉ khi có tiêu chí cần. Mã lỗi mạng thì lần sau thử lại."""
+        """Nến trong phiên cả thị trường cho các khung các tiêu chí dùng: nến nguồn 15 phút (khung 15 / 30 phút) và 1 giờ
+        (khung 1 / 2 / 4 giờ), ~30–40 s mỗi loại. Tải lại ngay sau mỗi lần chốt nến của loại đó (mốc tech.intraday_key đổi;
+        nghỉ trưa / ngoài giờ thì đứng yên), chỉ khi có tiêu chí cần. Mã lỗi mạng thì lần sau thử lại."""
         while True:
             try:
-                if any(core.needs_intraday(c) for c in self.cfg['criteria']):
+                tfs = core.intraday_tfs(self.cfg['criteria'])
+                for feed in sorted({tech.INTRA_TFS[tf][0] for tf in tfs}):
+                    want = sorted(tf for tf in tfs if tech.INTRA_TFS[tf][0] == feed)
                     now = core.vn_now()
-                    key = tech.intraday_key(now)
-                    same = self.intra.get('key') == key and self.intra.get('ver') == tech.VERSION
-                    done = self.intra.get('data', {}) if same else {}
+                    key = tech.intraday_key(now, feed)
+                    old = self.intra.get(str(feed)) or {}
+                    same = (old.get('key') == key and old.get('ver') == tech.VERSION
+                            and set(want) <= set(old.get('tfs', [])))
+                    done = old.get('data', {}) if same else {}
                     if len(done) < len(SYMBOLS):
-                        first = not self.intra_data()       # chưa có bộ nào dùng được → hiện % đang tải
+                        have = {tf for d in self.intra_data().values() for tf in d}
+                        first = not set(want) <= have       # khung cần chưa có số dùng được → hiện % đang tải
                         data = core.fetch_all_intraday(
-                            SYMBOLS, now, done,
+                            SYMBOLS, now, feed, want, done,
                             on_progress=(lambda p: self.q.put(('intra_progress', p))) if first else None)
-                        cur = {'key': key, 'ver': tech.VERSION, 'at': time.time(), 'data': data}
-                        save_json(INTRA_PATH, cur)
-                        self.q.put(('intra', cur, len(data) / len(SYMBOLS)))
+                        cur = {'key': key, 'ver': tech.VERSION, 'tfs': want, 'at': time.time(), 'data': data}
+                        merged = {**{k: v for k, v in self.intra.items() if k.isdigit()}, str(feed): cur}
+                        save_json(INTRA_PATH, merged)
+                        self.q.put(('intra', merged, len(data) / len(SYMBOLS)))
             except Exception:
                 log('intra: ' + traceback.format_exc())
             period = tech.INTRA_MIN * 60
@@ -1182,11 +1195,11 @@ class App:
                     if not self.tech_pending():
                         continue
                 elif kind == 'intra':
-                    first = not self.intra_data()
+                    before = {tf for d in self.intra_data().values() for tf in d}
                     self.intra, self.intra_progress = payload
-                    # Nến 15 phút vừa có lần đầu → cả loạt mã bỗng khớp, không phải "mã mới lọt lọc" → lấy lại mốc so.
-                    # Các lần chốt nến sau: mã mới khớp là tín hiệu thật → báo như thường.
-                    if first:
+                    # Khung trong phiên vừa có số lần đầu → cả loạt mã bỗng khớp, không phải "mã mới lọt lọc" → lấy lại mốc
+                    # so. Các lần chốt nến sau: mã mới khớp là tín hiệu thật → báo như thường.
+                    if {tf for d in self.intra_data().values() for tf in d} - before:
                         self.prev_by_key = None
                     self.compute()
                 elif kind == 'intra_progress':
@@ -1376,7 +1389,7 @@ class SettingsWindow:
         ttk.Label(p, text='Thêm điều kiện', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
         ttk.Label(p, text='Chọn nhóm → điều kiện → đặt giá trị → ＋ Thêm.\nĐiều kiện sẽ hiện ở danh sách bên trái.\n'
                           'Cần lịch sử giá (RSI, MACD, SMA, pullback, đỉnh/đáy…): lần đầu dùng sẽ tải ~1 phút.\n'
-                          'Khung 15 phút: xét nến đã chốt, tự tải lại mỗi 15 phút.',
+                          'Ô "khung": 15 phút … 4 giờ xét nến đã chốt (tự tải lại khi chốt nến), ngày / tuần ghép giá hiện tại.',
                   foreground='#666', wraplength=390, justify='left').pack(anchor='w', pady=(2, 6))
         self.catalog = conditions.catalog()
         self.group_ids = [g for g, _ in conditions.GROUPS]

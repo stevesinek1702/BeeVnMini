@@ -33,7 +33,7 @@ COOKIE_SHEET_URL = ('https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out
 STAT_UA = ('Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 '
            '(KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36')
 HISTORY_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=D'
-INTRA_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=15'
+INTRA_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution='       # + 15 / 60 (phút)
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
 
 # FireAnt cắt bớt kết quả khi hỏi quá nhiều mã một lần (400 mã chỉ về ~60%) → 100 mã/lượt.
@@ -272,26 +272,30 @@ def fetch_all_tech(symbols, today, done=None, on_progress=None, history=False):
     return done
 
 
-# Nến 15 phút: 21 ngày ≈ 15 phiên ≈ 240 nến với mã thanh khoản tốt — đủ để RSI Wilder 'quên' giá mồi đầu chuỗi.
-# Cả thị trường ~30 s; tải lại sau mỗi lần chốt nến khi có tiêu chí dùng khung 15 phút.
-INTRA_DAYS = 21
-
-
-def fetch_intraday(symbol, now):
+# Nến trong phiên: tải nến nguồn 15 phút (30 ngày) / 1 giờ (90 ngày), gộp ra các khung (tech.INTRA_TFS). Cả thị trường
+# ~30–40 s mỗi loại nến nguồn; tải lại sau mỗi lần chốt nến của loại đó khi có tiêu chí dùng.
+def fetch_intraday(symbol, now, feed, tfs):
+    """Nến `feed` phút (15 / 60) của 1 mã → {khung: tech.intraday_stats hoặc None} cho các khung `tfs` gộp từ loại nến đó,
+    mỗi khung chỉ lấy nến đã chốt tới lúc `now`."""
     to = int(now.timestamp())
-    cut = tech.intraday_cutoff(now)
-    return tech.intraday_stats(_get_json(f'{INTRA_URL}&symbol={symbol}&from={to - INTRA_DAYS * 86400}&to={to}',
-                                         accept='*/*'), cut and cut.timestamp())
+    bars = _get_json(f'{INTRA_URL}{feed}&symbol={symbol}&from={to - tech.INTRA_FEED_DAYS[feed] * 86400}&to={to}',
+                     accept='*/*')
+    out = {}
+    for tf in tfs:
+        minutes = tech.INTRA_TFS[tf][1]
+        cut = tech.intraday_cutoff(now, minutes)
+        out[tf] = tech.intraday_stats(bars, cut and cut.timestamp(), minutes if minutes != feed else None)
+    return out
 
 
-def fetch_all_intraday(symbols, now, done=None, on_progress=None):
-    """Thống kê nến 15 phút (đã chốt tới lúc `now`) cho các mã còn thiếu. Mã ít nến → {}; lỗi mạng → bỏ trống."""
+def fetch_all_intraday(symbols, now, feed, tfs, done=None, on_progress=None):
+    """{mã: {khung: thống kê}} nến trong phiên cho các mã còn thiếu. Mã ít nến → khung đó None; lỗi mạng → bỏ trống."""
     done = dict(done or {})
     todo = [s for s in symbols if s not in done]
 
     def one(sym):
         try:
-            return sym, (fetch_intraday(sym, now) or {})
+            return sym, fetch_intraday(sym, now, feed, tfs)
         except Exception:
             return sym, None
 
@@ -370,6 +374,7 @@ def transform_quote(q, hist=None, tech_stats=None, now=None, intra=None):
     row.update(conditions.indicator_metrics(tech_stats or None, row['_live']))
     if intra:
         row['_live']['intra'] = intra
+    row.update(conditions.tf_metrics(tech_stats or None, row['_live']))
     return row
 
 
@@ -497,14 +502,23 @@ def has_conditions(c):
 
 
 def needs_tech(c):
-    """Tiêu chí có dùng điều kiện cần lịch sử ~1 năm (thống kê kỹ thuật) không — không thì khỏi tải."""
-    return (any(conditions.signal_tf(s) == 'D' for s in c.get('signals') or [])
+    """Tiêu chí có dùng điều kiện cần lịch sử nến ngày ~1 năm (khung ngày / tuần) không — không thì khỏi tải."""
+    return (any(conditions.signal_tf(s) in ('D', 'W') for s in c.get('signals') or [])
             or any(k in conditions.TECH_METRIC_KEYS for k in active_filter_keys(c.get('filters'))))
 
 
+def intraday_tfs(criteria):
+    """Các khung trong phiên ('15m', '1h'…) mà các tiêu chí dùng (tín hiệu có khung, cột '@khung') — để tải nến trong phiên."""
+    tfs = set()
+    for c in criteria:
+        tfs.update(conditions.signal_tf(s) for s in c.get('signals') or [])
+        tfs.update(conditions.metric_tf(k) for k in active_filter_keys(c.get('filters')))
+    return {tf for tf in tfs if tf in tech.INTRA_TFS}
+
+
 def needs_intraday(c):
-    """Tiêu chí có tín hiệu khung 15 phút không — có thì tải nến 15 phút sau mỗi lần chốt nến."""
-    return any(conditions.signal_tf(s) == '15m' for s in c.get('signals') or [])
+    """Tiêu chí có dùng khung trong phiên không — có thì tải nến trong phiên sau mỗi lần chốt nến."""
+    return bool(intraday_tfs([c]))
 
 
 def needs_break_history(c):

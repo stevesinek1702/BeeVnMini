@@ -72,6 +72,13 @@ METRICS = [
     ('brkTL6mPx', 'Giá vượt trendline giảm 6 tháng (giá đóng cửa phiên vượt)', 'Giá vượt 6T', 'pullback', 'price'),
     ('brkTL6mPct', '% giá hiện tại so với giá vượt trendline giảm 6 tháng', '% từ vượt 6T', 'pullback', 'pct'),
 ]
+# Khung nến của tín hiệu / cột giá trị chỉ báo: trong phiên (tech.INTRA_TFS, xét nến đã chốt), ngày, tuần (ghép giá hiện tại)
+TF_NAME = {'15m': '15 phút', '30m': '30 phút', '1h': '1 giờ', '2h': '2 giờ', '4h': '4 giờ', 'D': 'ngày', 'W': 'tuần'}
+TF_ORDER = tuple(TF_NAME)
+# Cột giá trị chỉ báo theo khung khác ngày: mã '<cột>@<khung>', vd 'rsi14@1h'
+TF_METRIC_BASE = ('rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct')
+METRICS += [(f'{k}@{tf}', f'{label} · khung {TF_NAME[tf]}', f'{head} {tf}', group, fmt)
+            for k, label, head, group, fmt in [m for m in METRICS if m[0] in TF_METRIC_BASE] for tf in TF_ORDER if tf != 'D']
 METRIC_KEYS = [m[0] for m in METRICS]
 METRIC_LABEL = {m[0]: m[1] for m in METRICS}
 METRIC_HEAD = {m[0]: m[2] for m in METRICS}
@@ -92,9 +99,14 @@ BREAK_ALL_KEYS = {k: grp for grp, ks in BREAK_COMPANIONS.items() for k in (grp, 
 # Cột tính từ chỉ báo + phiên hôm nay (giá / cao / thấp / KL hiện tại): indicator_metrics
 INDICATOR_KEYS = ('rsi14', 'mfi14', 'stochK', 'willR', 'cci20', 'bbWidth', 'adx14', 'atrPct',
                   *(f'from{s}{p}' for s in ('High', 'Low') for p in ('1m', '3m', '6m', '1y')))
-# Cột phải có lịch sử nến mới tính được (các cột còn lại lấy thẳng từ quote)
+# Cột phải có lịch sử nến ngày mới tính được (các cột còn lại lấy thẳng từ quote; cột '@khung trong phiên' cần nến trong phiên)
 TECH_METRIC_KEYS = (*_TECH_PERIOD, *_TECH_AVGVOL, *_TECH_DIST, *_TECH_VOLVS, *BREAK_ALL_KEYS, *INDICATOR_KEYS,
-                    'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp')
+                    'upDays', 'downDays', 'upDaysBeforeDown', 'downDaysBeforeUp', *(f'{k}@W' for k in TF_METRIC_BASE))
+
+
+def metric_tf(key):
+    """Khung của một cột: 'rsi14@1h' → '1h'; cột thường → 'D'."""
+    return key.split('@', 1)[1] if '@' in key else 'D'
 
 
 def quote_metrics(q):
@@ -175,8 +187,8 @@ P_HIGHLOW = _p('period', 'trong', tuple(PERIOD_NAME), '1y')
 P_MA = _p('period', 'kỳ (phiên)', MA_PERIODS, 5)
 P_RSI_UP = _p('level', 'ngưỡng quá mua', (60, 65, 70, 75, 80, 85, 90), 70, True, 0, 100)
 P_RSI_DOWN = _p('level', 'ngưỡng quá bán', (10, 15, 20, 25, 30, 35, 40), 30, True, 0, 100)
-TF_NAME = {'15m': '15 phút', 'D': 'ngày'}
-P_TF = _p('tf', 'khung', tuple(TF_NAME), '15m')
+P_TF = _p('tf', 'khung', TF_ORDER, '15m')        # RSI tạo đáy (sinh ra cho khung 15 phút)
+P_TFD = _p('tf', 'khung', TF_ORDER, 'D')         # các tín hiệu chỉ báo khác: mặc định nến ngày như trước
 P_RSI_LOOK = _p('look', 'đáy trong (nến)', (8, 12, 16, 20, 24, tech.RSI_KEEP), 16)
 P_MA_STATE = _p('period', 'kỳ (phiên)', MA_PERIODS, 20)
 P_STO_UP = _p('level', 'ngưỡng quá mua', (70, 75, 80, 85, 90), 80, True, 0, 100)
@@ -281,15 +293,11 @@ def _rsi(kind):
 
 def _rsi_bottom(st, lv, p):
     """RSI tạo đáy (luật Long của anh bên hệ phái sinh): trong `look` nến gần nhất RSI(14) từng ≤ ngưỡng quá bán, nay đã
-    thoát lên trên ngưỡng + RSI trên Signal (WMA14 của RSI) + giá đóng cửa trên MA10 (SMA10).
-    Khung ngày: ghép giá hiện tại làm giá đóng cửa hôm nay như các tín hiệu khác. Khung 15 phút: xét nến đã chốt gần
-    nhất — danh sách đổi mỗi lần chốt nến, không nhảy ra nhảy vào theo từng nhịp giá."""
+    thoát lên trên ngưỡng + RSI trên Signal (WMA14 của RSI) + giá đóng cửa trên MA10 (SMA10). Mọi khung xét như nhau:
+    thống kê tới nến trước + "nến đang xét" (khung ngày / tuần: giá hiện tại; khung trong phiên: nến đã chốt gần nhất)."""
     rs = list(st.get('rs') or [])
-    if p['tf'] == 'D':
-        rs.append(rsi_now(st, lv['last'])[1])
-        price, ma = lv['last'], sma_live(st, lv['last'], 10)
-    else:
-        price, ma = st.get('lc'), st.get('p10')
+    rs.append(rsi_now(st, lv['last'])[1])
+    price, ma = lv['last'], sma_live(st, lv['last'], 10)
     n, k = tech.RSI_SIGNAL_N, p['look']
     if None in rs or len(rs) < max(n, k) or not price or not ma:
         return False
@@ -820,6 +828,11 @@ SIGNAL_LIST = [
     _sig('BounceBrokenDownTrendline', 'pullback', 'Sau vượt trendline giảm {period}: bật lên ±{tol}%',
          [P_PB_TL, P_PB_TOL], _retest_down_line(True)),
 ]
+# Tín hiệu chỉ báo chọn được khung (mặc định ngày); nhóm Giá (đỉnh / đáy theo tháng) và Pullback & trendline đo theo phiên → chỉ ngày
+TF_GROUPS = ('volume', 'ma', 'rsi', 'mfi', 'stoch', 'osc', 'bb', 'macd', 'adx', 'sar', 'ichimoku')
+TF_SUFFIX = ' · khung {tf}'
+SIGNAL_LIST = [s._replace(label=s.label + TF_SUFFIX, params=(P_TFD, *s.params))
+               if s.group in TF_GROUPS and all(p.id != 'tf' for p in s.params) else s for s in SIGNAL_LIST]
 SIGNALS = {s.id: s for s in SIGNAL_LIST}
 
 
@@ -846,7 +859,8 @@ def normalize_signal(raw):
                 v = p.choices[p.choices.index(v)]      # 5.0 → 5: khoá thống kê là p5, không phải p5.0
         params[p.id] = v if ok else p.default
     if 'short' in params and 'long' in params and params['short'] >= params['long']:
-        params['short'], params['long'] = (p.default for p in sig.params)     # đường ngắn phải ngắn hơn đường dài
+        d = {p.id: p.default for p in sig.params}
+        params['short'], params['long'] = d['short'], d['long']              # đường ngắn phải ngắn hơn đường dài
     return {'id': sig.id, 'params': params}
 
 
@@ -860,7 +874,7 @@ def param_text(value):
 
 
 def signal_tf(sig):
-    """Khung nến tín hiệu cần: 'D' (nến ngày — mọi tín hiệu không có tham số khung) hoặc '15m'."""
+    """Khung nến tín hiệu cần: 'D' (nến ngày — mọi tín hiệu không có tham số khung), 'W' hoặc khung trong phiên ('15m'…)."""
     return (sig.get('params') or {}).get('tf', 'D')
 
 
@@ -880,22 +894,61 @@ def catalog():
 
 
 def describe_signal(sig):
-    """Câu mô tả 1 tín hiệu, vd 'Giá cắt lên SMA(5)'."""
+    """Câu mô tả 1 tín hiệu, vd 'Giá cắt lên SMA(5)' (khung ngày không ghi, khung khác ghi thêm ' · khung 1 giờ')."""
     s = SIGNALS.get(sig.get('id'))
     if s is None:
         return str(sig.get('id'))
-    return s.label.format(**{k: param_text(v) for k, v in (sig.get('params') or {}).items()})
+    text = s.label.format(**{k: param_text(v) for k, v in (sig.get('params') or {}).items()})
+    return text.replace(TF_SUFFIX.format(tf=TF_NAME['D']), '')
+
+
+def intraday_live(st):
+    """Nến trong phiên đã chốt gần nhất (tech.intraday_stats: st['bar']) đóng vai "phiên hôm nay" của khung đó."""
+    _, h, lo, c, v = st['bar']
+    return {'last': c, 'high': h, 'low': lo, 'volume': v, 'est': v}
+
+
+def week_live(st, lv):
+    """"Tuần này": các phiên đã đóng của tuần (st['wk'] = [cao, thấp, KL]) ghép phiên hôm nay (giá / cao / thấp / KL)."""
+    wk = st.get('wk')
+    if not wk:
+        return lv
+    hi, lo = _hl(lv)
+    vol = lv.get('volume') or 0
+    return {'last': lv['last'], 'high': max(wk[0], hi), 'low': min(wk[1], lo), 'volume': wk[2] + vol,
+            'est': wk[2] + (lv.get('est') or vol)}
+
+
+def frame(tf, st, lv):
+    """(thống kê, phiên đang xét) của khung tf từ thống kê nến ngày `st` và giá hiện tại `lv`: ngày giữ nguyên; tuần dùng
+    st['w'] + week_live; khung trong phiên dùng lv['intra'][tf] (tech.intraday_stats) + nến đã chốt gần nhất."""
+    if tf == 'D':
+        return st, lv
+    if tf == 'W':
+        return ((st or {}).get('w'), week_live(st, lv)) if st and _valid(st, lv) else (None, None)
+    x = ((lv or {}).get('intra') or {}).get(tf)
+    return (x, intraday_live(x)) if x and x.get('bar') else (None, None)
+
+
+def tf_metrics(st, lv):
+    """Cột giá trị chỉ báo theo khung khác ngày ('rsi14@1h', 'adx14@W'…): indicator_metrics trên frame của từng khung."""
+    out = {}
+    for tf in TF_ORDER:
+        if tf != 'D':
+            s, l_ = frame(tf, st, lv)
+            m = indicator_metrics(s, l_) if s else {}
+            out.update({f'{k}@{tf}': m.get(k) for k in TF_METRIC_BASE})
+    return out
 
 
 def eval_signal(sig, st, lv):
-    """Tín hiệu `sig` có đang đúng với mã có thống kê `st` và giá hiện tại `lv` không.
-    lv = {'last', 'high', 'low', 'volume', 'est'} (giá nghìn đồng), thêm 'intra': {'15m': thống kê nến 15 phút}
-    khi có tiêu chí cần. Thiếu số → False."""
+    """Tín hiệu `sig` có đang đúng với mã có thống kê nến ngày `st` và giá hiện tại `lv` không.
+    lv = {'last', 'high', 'low', 'volume', 'est'} (giá nghìn đồng), thêm 'intra': {khung: thống kê nến trong phiên}
+    khi có tiêu chí cần. Tín hiệu có khung khác ngày thì xét trên khung đó (frame). Thiếu số → False."""
     s = SIGNALS.get(sig.get('id'))
     if s is None:
         return False
-    if signal_tf(sig) != 'D':
-        st = ((lv or {}).get('intra') or {}).get(signal_tf(sig))
+    st, lv = frame(signal_tf(sig), st, lv)
     if not _valid(st, lv):
         return False
     params = dict(sig.get('params') or {})

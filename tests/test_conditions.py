@@ -128,7 +128,7 @@ class MaDai(unittest.TestCase):
                 self.assertFalse(conditions.eval_signal(sig, st, {'last': 9}), (sid, n))
         # SMA50 cắt lên SMA200: chuẩn hoá giữ nguyên tham số mới
         s = conditions.normalize_signal({'id': 'ShortSMACrossAboveLongSMA', 'params': {'short': 50, 'long': 200}})
-        self.assertEqual(s['params'], {'short': 50, 'long': 200})
+        self.assertEqual(s['params'], {'tf': 'D', 'short': 50, 'long': 200})
 
     def test_chua_du_phien_thi_khong_tinh(self):
         st = self.stats(120, lambda i: 10)
@@ -458,13 +458,13 @@ class TinHieu(unittest.TestCase):
     def test_chuan_hoa_tin_hieu_tu_cai_dat(self):
         self.assertIsNone(conditions.normalize_signal({'id': 'KhongCo'}))
         self.assertIsNone(conditions.normalize_signal('rác'))
-        self.assertEqual(conditions.normalize_signal({'id': 'PriceCrossAboveSMA'})['params'], {'period': 5})    # thiếu → mặc định
-        self.assertEqual(sig('PriceCrossAboveSMA', period=7)['params'], {'period': 5})     # không có SMA(7) → mặc định
-        self.assertEqual(sig('PriceCrossAboveSMA', period=10.0)['params'], {'period': 10})
-        self.assertEqual(sig('RSIAboveOverBoughtLine', level=72.5)['params'], {'level': 72.5})   # ngưỡng nhập tự do
-        self.assertEqual(sig('RSIAboveOverBoughtLine', level=500)['params'], {'level': 70})      # ngoài 0..100
-        self.assertEqual(sig('PriceAboveBollingerBands', std='abc')['params'], {'std': 2})
-        self.assertEqual(sig('ShortSMACrossAboveLongSMA', short=15, long=15)['params'], {'short': 5, 'long': 15})
+        self.assertEqual(conditions.normalize_signal({'id': 'PriceCrossAboveSMA'})['params'], {'tf': 'D', 'period': 5})    # thiếu → mặc định
+        self.assertEqual(sig('PriceCrossAboveSMA', period=7)['params'], {'tf': 'D', 'period': 5})     # không có SMA(7) → mặc định
+        self.assertEqual(sig('PriceCrossAboveSMA', period=10.0)['params'], {'tf': 'D', 'period': 10})
+        self.assertEqual(sig('RSIAboveOverBoughtLine', level=72.5)['params'], {'tf': 'D', 'level': 72.5})   # ngưỡng nhập tự do
+        self.assertEqual(sig('RSIAboveOverBoughtLine', level=500)['params'], {'tf': 'D', 'level': 70})      # ngoài 0..100
+        self.assertEqual(sig('PriceAboveBollingerBands', std='abc')['params'], {'tf': 'D', 'std': 2})
+        self.assertEqual(sig('ShortSMACrossAboveLongSMA', short=15, long=15)['params'], {'tf': 'D', 'short': 5, 'long': 15})
 
     def test_mo_ta_tin_hieu(self):
         self.assertEqual(conditions.describe_signal(sig('PriceCrossAboveSMA', period=5)), 'Giá cắt lên SMA(5)')
@@ -479,10 +479,10 @@ class TinHieu(unittest.TestCase):
         cat = conditions.catalog()
         self.assertEqual(list(cat), [g for g, _ in conditions.GROUPS])
         self.assertTrue(all(cat.values()))                                  # nhóm nào cũng có điều kiện
-        self.assertEqual(sum(len(v) for v in cat.values()), 45 + 79)        # 45 cột số + 79 tín hiệu
+        self.assertEqual(sum(len(v) for v in cat.values()), 45 + 48 + 79)   # 45 cột số + 48 cột theo khung + 79 tín hiệu
         self.assertEqual(cat['price'][0], ('Thay đổi giá 1 tuần (%)', 'metric', 'change1w'))     # cột số trước tín hiệu
-        self.assertIn(('Giá cắt lên SMA(…)', 'signal', 'PriceCrossAboveSMA'), cat['ma'])
-        self.assertIn(('MACD cắt lên đường 0', 'signal', 'MACDCrossAboveZeroLine'), cat['macd'])
+        self.assertIn(('Giá cắt lên SMA(…) · khung …', 'signal', 'PriceCrossAboveSMA'), cat['ma'])
+        self.assertIn(('MACD cắt lên đường 0 · khung …', 'signal', 'MACDCrossAboveZeroLine'), cat['macd'])
         self.assertEqual(conditions.param_text('1m'), '1 tháng')
         self.assertEqual(conditions.param_text(70.0), '70')
         self.assertEqual(conditions.param_text(3.5), '3.5')
@@ -499,26 +499,37 @@ class TinHieu(unittest.TestCase):
 class RsiTaoDay(unittest.TestCase):
     """RSI tạo đáy (luật Long hệ phái sinh của anh) + chọn khung 15 phút / ngày. Đã đối chiếu với code pandas bên hệ
     phái sinh trên nến 15 phút thật (9 mã × 120 nến, 0 lệch)."""
-    # RSI 30 nến 15 phút đã chốt: rơi xuống đáy 23 (13 nến trước) rồi đi lên 44
-    RS = [50] * 10 + [45, 40, 35, 30, 26, 24, 23, 25, 27, 29, 31, 33, 35, 37, 38, 39, 40, 41, 42, 44]
+    # RSI 29 nến đã chốt: rơi xuống đáy 23 (12 nến trước) rồi đi lên 42; nến đang xét giá 10 = giá đóng nến trước
+    # → RSI của nó = avgGain / (avgGain + avgLoss) × 100 = `rsi` (chọn avgGain = rsi, avgLoss = 100 − rsi)
+    RS = [50] * 10 + [45, 40, 35, 30, 26, 24, 23, 25, 27, 29, 31, 33, 35, 37, 38, 39, 40, 41, 42]
 
-    def ev15(self, rs=None, lc=11, p10=10, **params):
-        st = {'rs': self.RS if rs is None else rs, 'lc': lc, 'p10': p10}
-        return conditions.eval_signal(sig('RSIBottom', tf='15m', **params), None, {**lv(lc), 'intra': {'15m': st}})
+    def st(self, rsi=44, p9=9.9, rs=None):
+        return {'rs': self.RS if rs is None else rs, 'ag': rsi, 'al': 100 - rsi, 'lc': 10, 'p9': p9, 'bar': [0, 10, 10, 10, 1]}
 
-    def test_du_3_dau_hieu_khung_15_phut(self):
-        self.assertTrue(self.ev15())
-        self.assertFalse(self.ev15(look=8))                       # đáy 23 nằm ngoài 8 nến gần nhất
-        self.assertFalse(self.ev15(rs=self.RS[:-1] + [29]))       # RSI chưa thoát vùng 30
-        self.assertFalse(self.ev15(rs=self.RS[:-1] + [31]))       # thoát 30 nhưng tụt dưới Signal (WMA14 ≈ 36.3)
-        self.assertFalse(self.ev15(lc=9.9))                       # giá dưới MA10
-        self.assertTrue(self.ev15(level=25))                      # đáy 23 ≤ 25, RSI 44 > 25
-        self.assertFalse(self.ev15(level=20))                     # đáy chưa xuống tới 20
-        self.assertFalse(self.ev15(rs=self.RS[-10:]))             # thiếu nến (WMA14 cần 14 RSI)
-        # Khung 15 phút chỉ đọc thống kê nến 15 phút: chưa tải (hoặc mã ít nến) thì không khớp
+    def ev(self, tf='15m', **kw):
+        params = {k: kw.pop(k) for k in ('level', 'look') if k in kw}
+        st, s = self.st(**kw), sig('RSIBottom', tf=tf, **params)
+        if tf == 'D':
+            return conditions.eval_signal(s, st, lv(10))
+        return conditions.eval_signal(s, None, {**lv(10), 'intra': {tf: st}})
+
+    def test_du_3_dau_hieu_moi_khung(self):
+        for tf in ('15m', '30m', '1h', '2h', '4h', 'D'):
+            self.assertTrue(self.ev(tf), tf)
+        self.assertFalse(self.ev(look=8))                         # đáy 23 nằm ngoài 8 nến gần nhất
+        self.assertFalse(self.ev(rsi=29))                         # RSI chưa thoát vùng 30
+        self.assertFalse(self.ev(rsi=31))                         # thoát 30 nhưng tụt dưới Signal (WMA14 ≈ 36.3)
+        self.assertFalse(self.ev(p9=10.1))                        # giá dưới MA10
+        self.assertTrue(self.ev(level=25))                        # đáy 23 ≤ 25, RSI 44 > 25
+        self.assertFalse(self.ev(level=20))                       # đáy chưa xuống tới 20
+        self.assertFalse(self.ev(rs=self.RS[-9:]))                # thiếu nến (WMA14 cần 14 RSI)
+        # Khung trong phiên chỉ đọc thống kê của khung đó: chưa tải (hoặc mã ít nến) thì không khớp
         s = sig('RSIBottom', tf='15m')
-        self.assertFalse(conditions.eval_signal(s, {'rs': self.RS, 'lc': 11, 'p10': 10}, lv(11)))
-        self.assertFalse(conditions.eval_signal(s, {'lc': 1}, {**lv(11), 'intra': {'15m': {}}}))
+        self.assertFalse(conditions.eval_signal(s, self.st(), lv(10)))
+        self.assertFalse(conditions.eval_signal(s, self.st(), {**lv(10), 'intra': {'1h': self.st()}}))
+        self.assertFalse(conditions.eval_signal(s, {'lc': 1}, {**lv(10), 'intra': {'15m': {}}}))
+        # Khung tuần: thống kê các tuần đã đóng (st['w']) + tuần này
+        self.assertTrue(conditions.eval_signal(sig('RSIBottom', tf='W'), {'lc': 9, 'w': self.st(), 'wk': None}, lv(10)))
 
     def test_khung_ngay_ghep_gia_hien_tai_khop_voi_nen_da_chot(self):
         # Rơi đều 60 nến rồi tăng 3 nến (RSI ≈ 28.6): giá hiện tại quyết định nến thứ 4 có đủ 3 dấu hiệu không.
@@ -559,19 +570,19 @@ class RsiTaoDay(unittest.TestCase):
         self.assertEqual(key(29, 20, 0), '2026-10-29 15:00')
         self.assertEqual(key(29, 8, 0), '2026-10-29 00:00')
         self.assertEqual(key(31, 10, 0), '2026-10-31 00:00')
-        # Nến có giờ mở từ cutoff trở đi (đang chạy) bị bỏ; None = mọi nến; quá ít nến → None
+        # Nến có giờ mở từ cutoff trở đi (đang chạy) bị bỏ; nến đã chốt gần nhất nằm ở 'bar', thống kê tính tới nến trước
         c = [10 + i % 5 for i in range(70)]
         bars = {'s': 'ok', 't': [i * 900 for i in range(70)], 'o': c, 'h': c, 'l': c, 'c': c, 'v': [1] * 70}
         st = tech.intraday_stats(bars, 65 * 900)
-        self.assertEqual((st['n'], st['lt'], st['lc']), (65, 64 * 900, c[64]))
-        self.assertEqual(st['p10'], sum(c[55:65]) / 10)
-        self.assertEqual(tech.intraday_stats(bars)['n'], 70)
+        self.assertEqual((st['n'], st['lc'], st['bar']), (64, c[63], [64 * 900, c[64], c[64], c[64], 1]))
+        self.assertAlmostEqual(st['p9'], sum(c[55:64]) / 9, places=5)
+        self.assertEqual(tech.intraday_stats(bars)['n'], 69)
         self.assertIsNone(tech.intraday_stats(bars, 50 * 900))
         self.assertIsNone(tech.intraday_stats({'s': 'no_data'}))
 
     def test_tham_so_mo_ta_va_noi_vao_bo_loc(self):
         self.assertEqual(sig('RSIBottom')['params'], {'tf': '15m', 'level': 30, 'look': 16})
-        self.assertEqual(sig('RSIBottom', tf='4h', look=17)['params'], {'tf': '15m', 'level': 30, 'look': 16})
+        self.assertEqual(sig('RSIBottom', tf='3h', look=17)['params'], {'tf': '15m', 'level': 30, 'look': 16})
         self.assertEqual(conditions.describe_signal(sig('RSIBottom', tf='D')),
                          'RSI tạo đáy khung ngày: thoát quá bán 30 (đáy trong 16 nến), RSI trên Signal, giá trên MA10')
         self.assertEqual(conditions.param_text('15m'), '15 phút')
@@ -580,11 +591,99 @@ class RsiTaoDay(unittest.TestCase):
         self.assertEqual((core.needs_intraday(day), core.needs_tech(day)), (False, True))
         self.assertFalse(core.needs_intraday({'signals': [sig('MACDAboveZeroLine')]}))
         q = {'Symbol': 'AAA', 'Exchange': 'HOSTC', 'PriceCurrent': 11000, 'TotalVolume': 0}
-        st = {'rs': self.RS, 'lc': 11, 'p10': 10}
+        st = self.st()
         row = core.transform_quote(q, intra={'15m': st})
         self.assertEqual(row['_live']['intra'], {'15m': st})
         self.assertEqual(core.apply_signals([row], m15['signals']), [row])
+        self.assertAlmostEqual(row['rsi14@15m'], 44)              # cột giá trị chỉ báo theo khung
+        self.assertIsNone(row['rsi14@1h'])
         self.assertNotIn('intra', core.transform_quote(q)['_live'])
+
+
+class KhungNen(unittest.TestCase):
+    """Chọn khung cho mọi tín hiệu chỉ báo: 15 / 30 phút, 1 / 2 / 4 giờ (nến đã chốt), ngày, tuần (ghép giá hiện tại)."""
+
+    def test_moi_tin_hieu_chi_bao_khung_1h_khop_khung_ngay(self):
+        # Cùng 1 dãy nến: xét khung 1 giờ (nến cuối = nến đã chốt) phải y như khung ngày (nến cuối = phiên hôm nay)
+        import random
+        rnd = random.Random(7)
+        c, vol = [20.0], [1000]
+        for _ in range(299):
+            c.append(round(max(1, c[-1] * (1 + rnd.uniform(-.04, .04))), 2))
+            vol.append(rnd.randint(200, 5000))
+        h = [round(x * (1 + rnd.uniform(0, .02)), 2) for x in c]
+        lo = [round(x * (1 - rnd.uniform(0, .02)), 2) for x in c]
+        days = [(date(2025, 1, 1) + timedelta(days=i)).isoformat() for i in range(300)]
+        daily = tech.stats_from_bars({'s': 'ok', 't': days, 'o': c, 'h': h, 'l': lo, 'c': c, 'v': vol}, days[-1], keep)
+        intra = tech.intraday_stats({'s': 'ok', 't': [i * 3600 for i in range(300)], 'o': c, 'h': h, 'l': lo, 'c': c, 'v': vol})
+        live = {'last': c[-1], 'high': h[-1], 'low': lo[-1], 'volume': vol[-1], 'est': vol[-1]}
+        tf_sigs = [s for s in conditions.SIGNAL_LIST if any(p.id == 'tf' for p in s.params)]
+        self.assertEqual(len(tf_sigs), 70)
+        hits = 0
+        for s in tf_sigs:
+            for vals in [dict(zip([p.id for p in s.params[1:]], v)) for v in zip(*[p.choices for p in s.params[1:]])] or [{}]:
+                d = conditions.eval_signal(sig(s.id, tf='D', **vals), daily, live)
+                self.assertEqual(conditions.eval_signal(sig(s.id, tf='1h', **vals), None, {**lv(99), 'intra': {'1h': intra}}), d, s.id)
+                hits += d
+        self.assertGreater(hits, 20)
+        m = conditions.tf_metrics(None, {**lv(99), 'intra': {'1h': intra}})
+        d = conditions.indicator_metrics(daily, live)
+        for k in conditions.TF_METRIC_BASE:
+            self.assertEqual(m[f'{k}@1h'], d[k], k)
+
+    def test_tham_so_khung(self):
+        self.assertEqual(sig('PriceCrossAboveSMA')['params'], {'tf': 'D', 'period': 5})       # mặc định ngày như trước
+        self.assertEqual(sig('MACDAboveZeroLine', tf='4h')['params'], {'tf': '4h'})
+        self.assertEqual(sig('MACDAboveZeroLine', tf='3h')['params'], {'tf': 'D'})
+        self.assertNotIn('tf', sig('AbovePreviousHigh')['params'])                             # đỉnh / đáy theo tháng: chỉ ngày
+        self.assertNotIn('tf', sig('PullbackToSMA')['params'])
+        self.assertEqual(conditions.describe_signal(sig('PriceCrossAboveSMA', period=20)), 'Giá cắt lên SMA(20)')
+        self.assertEqual(conditions.describe_signal(sig('PriceCrossAboveSMA', tf='1h', period=20)), 'Giá cắt lên SMA(20) · khung 1 giờ')
+        self.assertEqual(conditions.METRIC_LABEL['rsi14@W'], 'RSI(14) hiện tại · khung tuần')
+        self.assertEqual(conditions.metric_tf('rsi14@2h'), '2h')
+        crits = [{'signals': [sig('MACDAboveZeroLine', tf='30m')], 'filters': {'adx14@2h': {'operator': 'gt', 'value': 25}}},
+                 {'signals': [sig('MACDAboveZeroLine', tf='W')], 'filters': {}}]
+        self.assertEqual(core.intraday_tfs(crits), {'30m', '2h'})
+        self.assertEqual((core.needs_tech(crits[0]), core.needs_tech(crits[1])), (False, True))  # tuần gộp từ nến ngày
+        self.assertTrue(core.needs_tech({'filters': {'rsi14@W': {'operator': 'lt', 'value': 30}}}))
+
+    def test_nen_gop_va_moc_tung_khung(self):
+        import calendar
+        vn = lambda h, m: calendar.timegm((2026, 10, 29, h - 7, m, 0))                       # giờ VN → giây Unix
+        rows = [(vn(9, 15), 10, 11, 9, 10.5, 100), (vn(9, 30), 10.5, 12, 10, 11, 200), (vn(9, 45), 11, 11.5, 10.8, 11.2, 50),
+                (vn(10, 0), 11.2, 11.3, 11, 11.1, 10)]
+        self.assertEqual(tech.merge_bars(rows, 30), [(vn(9, 0), 10, 11, 9, 10.5, 100), (vn(9, 30), 10.5, 12, 10, 11.2, 250),
+                                                     (vn(10, 0), 11.2, 11.3, 11, 11.1, 10)])
+        h1 = [(vn(hh, 0), 1, 2, 0.5, hh, 10) for hh in (9, 10, 11, 13, 14)]
+        self.assertEqual([(b[0], b[4], b[5]) for b in tech.merge_bars(h1, 240)], [(vn(9, 0), 11, 30), (vn(13, 0), 14, 20)])
+        self.assertEqual([b[0] for b in tech.merge_bars(h1, 120)], [vn(9, 0), vn(11, 0), vn(13, 0)])
+        at = lambda h, m: datetime(2026, 10, 29, h, m, 30, tzinfo=VN)
+        self.assertEqual(tech.intraday_cutoff(at(10, 59), 60).strftime('%H:%M'), '10:00')
+        self.assertEqual(tech.intraday_cutoff(at(10, 59), 120).strftime('%H:%M'), '09:00')
+        self.assertEqual(tech.intraday_cutoff(at(14, 50), 240).strftime('%H:%M'), '13:00')
+        self.assertEqual(tech.intraday_cutoff(at(9, 40), 30).strftime('%H:%M'), '09:30')
+        self.assertIsNone(tech.intraday_cutoff(at(12, 0), 240))                               # nghỉ trưa: nến sáng đã chốt
+        self.assertEqual(tech.intraday_key(at(12, 0), 60), '2026-10-29 11:30')
+        self.assertEqual(tech.intraday_key(at(13, 20), 240), '2026-10-29 13:00')
+
+    def test_nen_tuan(self):
+        # 3 tuần + thứ Hai, Ba tuần này (29/10/2026 là thứ Năm → tuần này từ 26/10)
+        days = [(date(2026, 10, 5) + timedelta(days=i)).isoformat() for i in range(23)]          # 05/10 … 27/10
+        rows = [(d, i, i + 1, i - 1, i + .5, 10) for i, d in enumerate(days, 2)]
+        st, wk = tech.weekly_parts(rows, '2026-10-29')
+        self.assertIsNone(st)                                                                   # < 20 tuần: chưa tính
+        self.assertEqual(wk, [24 + 1, 23 - 1, 20])                                               # 26/10 + 27/10
+        weeks = []
+        for d, o, hh, ll, cc, vv in rows:
+            ws = tech.week_start(d)
+            weeks.append(ws) if not weeks or weeks[-1] != ws else None
+        self.assertEqual(weeks[:3], ['2026-10-05', '2026-10-12', '2026-10-19'])
+        self.assertEqual(conditions.week_live({'wk': [12, 9, 1000]}, lv(10, high=11, low=8, volume=500, est=800)),
+                         {'last': 10, 'high': 12, 'low': 8, 'volume': 1500, 'est': 1800})
+        self.assertEqual(conditions.week_live({'wk': None}, lv(10)), lv(10))                   # thứ Hai: tuần chỉ có hôm nay
+        st = stats_of(200)[0]                                                                   # 200 ngày ≈ 29 tuần
+        self.assertIsNotNone(st['w'])
+        self.assertIsNotNone(conditions.tf_metrics(st, lv(201, high=201.5, low=200))['rsi14@W'])
 
 
 class ChiBaoBoSung(unittest.TestCase):
@@ -661,7 +760,7 @@ class ChiBaoBoSung(unittest.TestCase):
         self.assertFalse(self.ev('ShortSMAAboveLongSMA', lv(61)))          # SMA200 chưa đủ phiên
         self.assertTrue(self.ev('ShortEMACrossBelowLongEMA', lv(1), short=10, long=20))
         self.assertFalse(self.ev('ShortEMACrossAboveLongEMA', lv(61), short=10, long=20))
-        self.assertEqual(sig('ShortEMACrossAboveLongEMA', short=50, long=20)['params'], {'short': 10, 'long': 20})
+        self.assertEqual(sig('ShortEMACrossAboveLongEMA', short=50, long=20)['params'], {'tf': 'D', 'short': 10, 'long': 20})
 
     def test_cot_so_chi_bao(self):
         m = conditions.indicator_metrics(self.ST, lv(61, high=61.5, low=60, volume=1000))
@@ -768,7 +867,7 @@ class NoiVaoBoLoc(unittest.TestCase):
             {'name': 'Cắt SMA', 'exchange': 'HSX', 'signals': [{'id': 'PriceCrossAboveSMA', 'params': {'period': 10}},
                                                                {'id': 'KhongCo'}, 'rác']},
             {'name': 'Thường', 'filters': {'price': {'operator': 'lt', 'value': 20}}}]})
-        self.assertEqual(c[0]['signals'], [{'id': 'PriceCrossAboveSMA', 'params': {'period': 10}}])
+        self.assertEqual(c[0]['signals'], [{'id': 'PriceCrossAboveSMA', 'params': {'tf': 'D', 'period': 10}}])
         self.assertNotIn('signals', c[1])                            # tiêu chí cũ giữ nguyên dạng
         self.assertTrue(core.has_conditions(c[0]))                   # chỉ có tín hiệu vẫn là có điều kiện
         self.assertTrue(core.has_conditions(c[1]))
