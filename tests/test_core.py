@@ -191,7 +191,7 @@ class LocGiongWeb(unittest.TestCase):
 
 class NguonDuLieu(unittest.TestCase):
     def test_doi_quote_fireant_sang_hang_bang_gia(self):
-        r = core.transform_quote(VIB_Q, {'ma10': 13.7, 'ma20': 13.6, 'ma45': 13.4, 'avgVol': 4505800 / 2})
+        r = core.transform_quote(VIB_Q, {'ma10': 13.7, 'ma20': 13.6, 'ma50': 13.4, 'avgVol': 4505800 / 2})
         self.assertEqual((r['symbol'], r['exchange'], r['price'], r['change']), ('VIB', 'HSX', 14, 0.2))
         self.assertEqual((r['changePercent'], r['volume'], r['value'], r['volRatio']), (1.45, 4505800, 63.4, 200))
         self.assertEqual(r['ma10'], 13.7)
@@ -236,46 +236,40 @@ class NguonDuLieu(unittest.TestCase):
 
     def test_ma_tren_phien_da_dong_bo_nen_hom_nay(self):
         start = calendar.timegm((2026, 8, 1, 0, 0, 0))   # 07:00 giờ VN
-        n = 50
+        n = 52
         t = [start + i * 86400 for i in range(n)]
         c = list(range(1, n + 1))
         v = [1000] * n
         c[-1], v[-1] = 999, 999999          # nến "hôm nay" — phải bị bỏ
         s = core.hist_stats({'s': 'ok', 't': t, 'c': c, 'v': v}, core.vn_date(t[-1]))
-        self.assertEqual((s['ma10'], s['ma20'], s['ma45'], s['avgVol']), (44.5, 39.5, 27, 1000))
+        self.assertEqual((s['ma10'], s['ma20'], s['ma50'], s['avgVol']), (46.5, 41.5, 26.5, 1000))
 
     def test_lich_su_ngan_hoac_khong_co(self):
         s = core.hist_stats({'s': 'ok', 't': [1, 2, 3], 'c': [1, 2, 3], 'v': [1, 1, 1]}, '2099-01-01')
-        self.assertIsNone(s['ma45'])
+        self.assertIsNone(s['ma50'])
         self.assertEqual(s['avgVol'], 0)
         self.assertIsNone(core.hist_stats({'s': 'no_data'}, '2099-01-01'))
         self.assertIsNone(core.hist_stats(None, '2099-01-01'))
 
 
 
-class FireAntCookie(unittest.TestCase):
-    def test_doc_trading_statistic_giong_server_bee(self):
-        data = [{'Symbol': 'VIB', 'AvgPrice10d': 13585.0, 'AvgPrice20d': 13520.0, 'AvgPrice45d': 13470.0,
-                 'AvgVolume45d': 4728061.0},
-                {'Symbol': 'XYZ', 'AvgPrice10d': 0, 'AvgVol45': 1000}]
-        out = core.parse_trading_stats(data)
-        self.assertEqual(out['VIB'], {'ma10': 13.59, 'ma20': 13.52, 'ma45': 13.47, 'avgVol': 4728061.0})
-        self.assertEqual(out['XYZ']['ma10'], None)
-        self.assertEqual(out['XYZ']['avgVol'], 1000)
-        r = core.transform_quote(VIB_Q, out['VIB'])
-        self.assertEqual(r['volRatio'], 95)        # 4.505.800 / 4.728.061
+class CaiDatBanCu(unittest.TestCase):
+    def test_bo_sheet_cookie_va_doi_ma45_sang_ma50(self):
+        cfg = core.migrate_config({
+            'cookieSheetId': 'x' * 30, 'sortColumn': 'ma45', 'watchSort': ['ma45', 'asc'],
+            'criteria': [{'filters': {'ma45': {'operator': 'gt', 'value': 10}}, 'sortColumn': 'ma45'},
+                         {'filters': {'price': {'operator': 'gt', 'value': 5}}, 'sortColumn': 'value'}]})
+        self.assertNotIn('cookieSheetId', cfg)
+        self.assertEqual((cfg['sortColumn'], cfg['watchSort']), ('ma50', ['ma50', 'asc']))
+        self.assertEqual(cfg['criteria'][0], {'filters': {'ma50': {'operator': 'gt', 'value': 10}},
+                                              'sortColumn': 'ma50'})
+        self.assertEqual(cfg['criteria'][1]['filters'], {'price': {'operator': 'gt', 'value': 5}})
+        # Lọc MA50 vừa đổi tên vẫn được tính là cột đang lọc
+        self.assertEqual(core.active_filter_keys(cfg['criteria'][0]['filters']), ['ma50'])
 
-    def test_nhan_link_hoac_id_sheet(self):
-        sid = 'AbCdEfGhIjKlMnOpQrStUvWxYz_0123456789-xy'
-        self.assertEqual(core.sheet_id_from(f'https://docs.google.com/spreadsheets/d/{sid}/edit?gid=0#gid=0'), sid)
-        self.assertEqual(core.sheet_id_from('  ' + sid + ' '), sid)
-        self.assertEqual(core.sheet_id_from('khong phai link'), '')
-        self.assertEqual(core.sheet_id_from(''), '')
-
-    def test_phan_hoi_rong_hoac_sai_la_cookie_het_han(self):
-        for bad in ([], {'Message': 'Authorization has been denied for this request.'}, None):
-            with self.assertRaises(core.CookieExpired):
-                core.parse_trading_stats(bad)
+    def test_cai_dat_moi_khong_doi(self):
+        cfg = {'sortColumn': 'value', 'criteria': [{'filters': {}}]}
+        self.assertEqual(core.migrate_config(dict(cfg)), cfg)
 
 
 if __name__ == '__main__':

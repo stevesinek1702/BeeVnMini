@@ -3,10 +3,9 @@ Phần lõi của Bee.vn mini — không dính giao diện, để test được.
 
 Nguồn dữ liệu:
   - Giá trong phiên: FireAnt /api/Data/Markets/Quotes — công khai, không cần đăng nhập.
-  - MA10/20/45 + KL trung bình 45 phiên, ưu tiên:
-      1. FireAnt /Markets/TradingStatistic bằng cookie đọc từ ô D2 sheet Dashboard của anh Si
-         (cùng cách web Bee.vn làm → số khớp y hệt web);
-      2. cookie hết hạn → tự tính từ nến ngày VNDirect dchart, trên phiên ĐÃ ĐÓNG.
+  - MA10/20/50 + KL trung bình 45 phiên: tự tính từ nến ngày VNDirect dchart, trên phiên ĐÃ ĐÓNG.
+    (07/11/2026 bỏ cookie FireAnt TradingStatistic: FireAnt chỉ có MA45 mà anh Si muốn MA50,
+    lại phải chia sẻ phiên đăng nhập FireAnt qua sheet.)
 
 Lọc / sắp xếp / định dạng giữ y như bảng giá Bee.vn để số hiện ra giống hệt web.
 """
@@ -14,7 +13,6 @@ import json
 import math
 import re
 import time
-import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -24,14 +22,6 @@ import conditions
 import tech
 
 QUOTES_URL = 'https://www.fireant.vn/api/Data/Markets/Quotes?symbols='
-TRADING_STAT_URL = 'https://www.fireant.vn/api/Data/Markets/TradingStatistic'
-# Ô D2 sheet "Dashboard" — nơi cookie FireAnt được làm mới tự động. Đọc dạng CSV (sheet chia sẻ bằng link).
-# KHÔNG ghi sẵn ID sheet ở đây: cookie là phiên đăng nhập FireAnt của chủ sheet, chia sẻ chương trình
-# mà kèm ID thì ai cũng dùng được tài khoản đó. Mỗi người tự điền sheet của mình trong Cài đặt.
-COOKIE_SHEET_URL = ('https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Dashboard&range=D2')
-# TradingStatistic chỉ chịu đúng bộ header này (lấy từ Excel M code / server Bee.vn)
-STAT_UA = ('Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 '
-           '(KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36')
 HISTORY_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution=D'
 INTRA_URL = 'https://dchart-api.vndirect.com.vn/dchart/history?resolution='       # + 15 / 60 (phút)
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
@@ -61,7 +51,7 @@ COLUMNS = [
     ('value', 'GTGD'),
     ('ma10', 'MA10'),
     ('ma20', 'MA20'),
-    ('ma45', 'MA45'),
+    ('ma50', 'MA50'),
     ('demandStrength', 'Lực cầu'),
 ]
 LABEL = {**dict(COLUMNS), **conditions.METRIC_LABEL}
@@ -120,75 +110,6 @@ def fetch_quotes(symbols):
     return [q for p in parts if p for q in p]
 
 
-class CookieExpired(Exception):
-    """Cookie FireAnt hết hạn / sai → FireAnt đẩy về trang đăng nhập."""
-
-
-def sheet_id_from(text):
-    """Nhận link Google Sheet hoặc ID trần, trả ID ('' nếu không nhận ra)."""
-    import re
-    text = (text or '').strip()
-    m = re.search(r'/spreadsheets/d/([A-Za-z0-9_-]{20,})', text)
-    if m:
-        return m.group(1)
-    return text if re.fullmatch(r'[A-Za-z0-9_-]{20,}', text) else ''
-
-
-def fetch_fireant_cookie(sheet_id):
-    """Đọc cookie từ ô D2. Trả None nếu ô trống / không phải cookie FireAnt."""
-    import csv
-    import io
-    req = urllib.request.Request(COOKIE_SHEET_URL.format(id=sheet_id), headers={'User-Agent': UA})
-    with urllib.request.urlopen(req, timeout=20) as res:
-        text = res.read().decode('utf-8', errors='replace')
-    rows = list(csv.reader(io.StringIO(text)))
-    val = rows[0][0].strip() if rows and rows[0] else ''
-    return val if 'FireAnt.Authentication' in val else None
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):
-        return None
-
-
-def parse_trading_stats(data):
-    """Đổi phản hồi TradingStatistic sang {mã: {ma10, ma20, ma45, avgVol}} — y cách server Bee.vn đọc."""
-    if not isinstance(data, list) or not data:
-        raise CookieExpired('TradingStatistic không trả danh sách')
-    out = {}
-    for it in data:
-        sym = it.get('Symbol')
-        if not sym:
-            continue
-
-        def ma(k):
-            v = it.get(k)
-            return float(_fixed(v / 1000, 2)) if v else None
-        out[sym] = {
-            'ma10': ma('AvgPrice10d'), 'ma20': ma('AvgPrice20d'), 'ma45': ma('AvgPrice45d'),
-            'avgVol': it.get('AvgVolume45d') or it.get('AvgVol45') or it.get('AvgVolume') or 0,
-        }
-    return out
-
-
-def fetch_trading_stats(cookie):
-    req = urllib.request.Request(TRADING_STAT_URL, headers={
-        'Cookie': cookie, 'User-Agent': STAT_UA, 'Accept-Language': 'en-US,en;q=0.9,vi;q=0.8'})
-    opener = urllib.request.build_opener(_NoRedirect)
-    try:
-        with opener.open(req, timeout=60) as res:
-            body = res.read()
-    except urllib.error.HTTPError as e:
-        if e.code in (301, 302, 401, 403):
-            raise CookieExpired(f'FireAnt trả {e.code}')
-        raise
-    try:
-        data = json.loads(body.decode('utf-8'))
-    except ValueError:
-        raise CookieExpired('FireAnt trả trang HTML (chưa đăng nhập)')
-    return parse_trading_stats(data)
-
-
 def hist_stats(bars, today):
     """MA + KL trung bình trên các phiên đã đóng — bỏ nến hôm nay (phiên đang chạy, chưa chốt)."""
     if not isinstance(bars, dict) or bars.get('s') != 'ok' or not isinstance(bars.get('t'), list):
@@ -208,12 +129,12 @@ def hist_stats(bars, today):
         return None if v is None else float(_fixed(v, 2))
 
     av = avg(vols, 45)
-    return {'ma10': ma(10), 'ma20': ma(20), 'ma45': ma(45), 'avgVol': 0 if av is None else round(av)}
+    return {'ma10': ma(10), 'ma20': ma(20), 'ma50': ma(50), 'avgVol': 0 if av is None else round(av)}
 
 
 def fetch_history(symbol, today):
     to = int(time.time())
-    frm = to - 100 * 86400   # ~70 phiên, dư cho 45 phiên kể cả nghỉ lễ
+    frm = to - 100 * 86400   # ~70 phiên, dư cho 50 phiên kể cả nghỉ lễ
     # dchart trả 406 nếu hỏi đích danh application/json
     return hist_stats(_get_json(f'{HISTORY_URL}&symbol={symbol}&from={frm}&to={to}', accept='*/*'), today)
 
@@ -356,7 +277,7 @@ def transform_quote(q, hist=None, tech_stats=None, now=None, intra=None):
         'volRatio': round(vol / h['avgVol'] * 100) if h.get('avgVol') else None,
         'ma10': h.get('ma10'),
         'ma20': h.get('ma20'),
-        'ma45': h.get('ma45'),
+        'ma50': h.get('ma50'),
         'demandStrength': luc_cau(q),
     }
     # Giá đang ở trần / sàn → mã và các ô giá đổi sang màu trần (tím) / sàn (xanh lơ) như bảng giá
@@ -584,6 +505,20 @@ def parse_update(info, current):
 ALERT_MODES = ('speak', 'beep', 'off')   # đọc tên mã | kêu "ting" | im lặng
 
 
+def migrate_config(cfg):
+    """Cài đặt bản cũ → bản này (07/11/2026): bỏ ID sheet cookie FireAnt; lọc / xếp theo MA45 chuyển sang MA50."""
+    cfg.pop('cookieSheetId', None)
+    for c in [cfg] + [c for c in cfg.get('criteria') or [] if isinstance(c, dict)]:
+        if c.get('sortColumn') == 'ma45':
+            c['sortColumn'] = 'ma50'
+        if isinstance(c.get('filters'), dict) and 'ma45' in c['filters']:
+            c['filters']['ma50'] = c['filters'].pop('ma45')
+    ws = cfg.get('watchSort')
+    if isinstance(ws, list) and ws and ws[0] == 'ma45':
+        cfg['watchSort'] = ['ma50', *ws[1:]]
+    return cfg
+
+
 def criteria_from_config(cfg):
     """Danh sách tiêu chí lọc. Cài đặt cũ (1 bộ lọc ở exchange/filters) tự thành "Tiêu chí 1".
     Mỗi tiêu chí có kiểu báo mã mới riêng; thiếu thì lấy kiểu báo chung cũ (mặc định đọc tên mã)."""
@@ -740,7 +675,7 @@ def format_cell(s, key):
     if key == 'value':
         v = s.get('value')
         return (_fixed(v, 1) if v else '--') + ' tỷ', ''
-    if key in ('ma10', 'ma20', 'ma45'):
+    if key in ('ma10', 'ma20', 'ma50'):
         v = s.get(key)
         return (js_num(v) if v else '--'), ''
     if key == 'demandStrength':

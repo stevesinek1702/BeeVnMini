@@ -47,6 +47,7 @@ UPDATE_CHECK_SEC = 6 * 3600
 DATA_DIR = os.environ.get('BEEVN_DATA_DIR') or os.path.join(os.environ.get('APPDATA', HERE), 'BeeVnMini')
 CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 HIST_PATH = os.path.join(DATA_DIR, 'hist.json')
+HIST_FORMAT = 'vndirect-ma50'   # đổi cách tính MA thì đổi chuỗi này → bỏ hist.json cũ (MA45 / FireAnt)
 TECH_PATH = os.path.join(DATA_DIR, 'tech.json')      # thống kê kỹ thuật từ nến ngày, mỗi ngày tải 1 lần
 INTRA_PATH = os.path.join(DATA_DIR, 'intra.json')    # thống kê nến trong phiên, tải lại sau mỗi lần chốt nến
 LOG_PATH = os.path.join(DATA_DIR, 'log.txt')
@@ -81,9 +82,6 @@ DEFAULT_CONFIG = {
     'watch': [],          # danh mục theo dõi: các mã anh chọn, hiện thành khối "★ Theo dõi" dưới các tiêu chí
     'watchSort': ['symbol', 'asc'],
     'opacity': 1.0,
-    # Google Sheet có cookie FireAnt ở ô D2 sheet Dashboard. Anh Si cho mọi người dùng chung sheet này
-    # (14/10/2026); xoá trống trong Cài đặt thì máy đó thôi dùng FireAnt, tự tính MA từ VNDirect.
-    'cookieSheetId': '1IaSyUm5opJttxGgJa_4ucDSWEzEJQYaTFVTwYtBiH9c',
     'askedInstall': False,
 }
 
@@ -232,15 +230,19 @@ class App:
     def __init__(self, root, lock=None):
         self.root = root
         saved = load_json(CONFIG_PATH, {})
-        self.cfg = {**DEFAULT_CONFIG, **saved}
+        self.cfg = core.migrate_config({**DEFAULT_CONFIG, **saved})
         if 'alert' not in saved and saved.get('sound') is False:   # cài đặt cũ: đã tắt tiếng
             self.cfg['alert'] = 'off'
         # Nhiều tiêu chí lọc; cài đặt cũ (1 bộ lọc) tự thành "Tiêu chí 1"
         self.cfg['criteria'] = core.criteria_from_config(self.cfg)
         self.cfg['watch'] = core.parse_symbols(self.cfg.get('watch'))
+        if 'cookieSheetId' in saved:   # bản cũ lưu ID sheet cookie FireAnt → xoá khỏi máy
+            save_json(CONFIG_PATH, self.cfg)
         self.speaker = None          # tiến trình đang đọc to
         self.pending_say = []        # mã mới đến lúc đang đọc dở → đọc tiếp sau
         self.hist = load_json(HIST_PATH, {})
+        if self.hist.get('source') != HIST_FORMAT:   # hist.json của bản cũ (MA45 / FireAnt) → tính lại
+            self.hist = {}
         self.quotes = None
         self.fetched_at = None
         self.error = None
@@ -249,7 +251,6 @@ class App:
         self.tech_progress = 1.0 if self.tech_fresh(core.vn_date(time.time())) else 0.0
         self.intra = load_json(INTRA_PATH, {})   # {loại nến nguồn: bộ thống kê} — chỉ tải khi có tiêu chí dùng khung trong phiên
         self.intra_progress = 1.0 if self.intra_data() else 0.0
-        self.stat_note = None   # lý do không dùng được FireAnt cho cột MA (vd cookie hết hạn)
         self.prev_by_key = None      # {khoá tiêu chí: tập mã lượt trước} — để biết mã nào MỚI lọt lọc
         self.new_until = {}
         self.sections = []           # [(tiêu chí, [mã khớp])] — chỉ tiêu chí đã có điều kiện
@@ -540,9 +541,7 @@ class App:
     def ma_source_note(self):
         if self.hist_progress < 1:
             return f'đang tính MA {int(self.hist_progress * 100)}%'
-        if self.hist.get('source') == 'fireant':
-            return 'MA: FireAnt'
-        return 'MA: tự tính từ VNDirect' + (f' ({self.stat_note})' if self.stat_note else '')
+        return 'MA: tự tính từ VNDirect'
 
     def render(self):
         cfg = self.cfg
@@ -968,33 +967,16 @@ class App:
             self.wake.clear()
 
     def hist_loop(self):
-        """MA + KL trung bình: ưu tiên FireAnt (cookie ô D2), hết hạn thì tự tính từ VNDirect."""
+        """MA10/20/50 + KL trung bình 45 phiên: tự tính từ nến ngày VNDirect."""
         while True:
             try:
                 today = core.vn_date(time.time())
                 hist = self.hist if self.hist.get('day') == today else {'day': today, 'data': {}}
-                sheet = self.cfg.get('cookieSheetId')
-                if not sheet:
-                    self.q.put(('stat_note', None))
-                if sheet and hist.get('source') != 'fireant':
-                    try:
-                        cookie = core.fetch_fireant_cookie(sheet)
-                        if not cookie:
-                            raise core.CookieExpired('ô D2 trống')
-                        hist = {'day': today, 'data': core.fetch_trading_stats(cookie), 'source': 'fireant'}
-                        save_json(HIST_PATH, hist)
-                        self.q.put(('hist', hist, None))
-                    except core.CookieExpired as e:
-                        log('cookie FireAnt: ' + str(e))
-                        self.q.put(('stat_note', 'cookie FireAnt hết hạn'))
-                    except Exception as e:
-                        log('cookie FireAnt: ' + repr(e))
-                        self.q.put(('stat_note', 'không đọc được cookie FireAnt'))
-                if hist.get('source') != 'fireant' and len(hist['data']) < len(SYMBOLS):
+                if len(hist['data']) < len(SYMBOLS):
                     data = core.fetch_all_history(
                         SYMBOLS, today, hist['data'],
                         on_progress=lambda p: self.q.put(('hist_progress', p)))
-                    hist = {'day': today, 'data': data, 'source': 'vndirect'}
+                    hist = {'day': today, 'data': data, 'source': HIST_FORMAT}
                     save_json(HIST_PATH, hist)
                     self.q.put(('hist', hist, len(data) / len(SYMBOLS)))
             except Exception:
@@ -1179,8 +1161,6 @@ class App:
                 elif kind == 'hist':
                     self.hist, progress = payload
                     self.hist_progress = 1.0 if progress is None else progress
-                    if self.hist.get('source') == 'fireant':
-                        self.stat_note = None
                     # MA / KL trung bình vừa có (hoặc đổi nguồn) → tiêu chí dùng % KL/TB, MA bỗng khớp thêm cả
                     # loạt mã; đó không phải "mã mới lọt lọc" → lấy lại mốc so, không báo.
                     self.prev_by_key = None
@@ -1225,8 +1205,6 @@ class App:
                 elif kind == 'show':
                     self.bring_front()
                     continue
-                elif kind == 'stat_note':
-                    self.stat_note = payload[0]
                 elif kind == 'hist_progress':
                     self.hist_progress = payload[0]
                     if self.cfg['mode'] != 'full':
@@ -1342,14 +1320,6 @@ class SettingsWindow:
         ttk.Checkbutton(gen, text='Tự mở khi bật máy', variable=self.startup) \
             .grid(row=1, column=0, columnspan=3, sticky='w', pady=2)
 
-        ttk.Separator(side).pack(fill='x', pady=12)
-        ttk.Label(side, text='Sheet cookie FireAnt (tuỳ chọn)', font=('Segoe UI', 9, 'bold')).pack(anchor='w')
-        ttk.Label(side, text='Dán link Google Sheet có cookie FireAnt ở ô D2 sheet "Dashboard" → cột MA lấy '
-                             'thẳng FireAnt. Để trống → MA tự tính từ VNDirect.', foreground='#666',
-                  wraplength=390, justify='left').pack(anchor='w', pady=(2, 4))
-        self.sheet = ttk.Entry(side, width=52)
-        self.sheet.insert(0, cfg.get('cookieSheetId') or '')
-        self.sheet.pack(fill='x')
 
         btns = ttk.Frame(outer)
         btns.grid(row=1, column=0, columnspan=2, sticky='e', pady=(12, 0))
@@ -1625,11 +1595,6 @@ class SettingsWindow:
         if not self.store_form():
             return
         self.load_form()                 # cập nhật tên mới trong ô chọn
-        sheet_raw = self.sheet.get().strip()
-        sheet = core.sheet_id_from(sheet_raw)
-        if sheet_raw and not sheet:
-            messagebox.showwarning(APP_NAME, 'Không nhận ra link Google Sheet.', parent=self.win)
-            return
         watch = core.parse_symbols(self.watch.get())
         unknown = [s for s in watch if s not in SYMBOL_SET]
         if unknown:
@@ -1642,10 +1607,7 @@ class SettingsWindow:
             'criteria': copy.deepcopy(self.crits),
             'watch': watch,
             'opacity': round(self.opacity.get(), 2),
-            'cookieSheetId': sheet,
         })
-        self.app.hist['source'] = None   # đổi sheet → thử lại FireAnt ngay
-        self.app.wake_hist.set()
         self.app.wake_tech.set()         # vừa thêm điều kiện cần chỉ báo kỹ thuật → bắt đầu tải ngay
         self.app.wake_intra.set()
         if self.startup.get() != has_startup():

@@ -61,15 +61,13 @@ chuyển sang Chrome, Excel, Zalo… nó vẫn hiện ở góc dưới-phải.
 | Cột | Nguồn |
 |---|---|
 | Giá, Thay đổi, % Thay đổi, KLGD, GTGD, Lực cầu | FireAnt (công khai) — cùng nguồn bảng giá Bee.vn |
-| MA10, MA20, MA45, % KL/TB (KL hôm nay so với **trung bình 45 phiên**) | FireAnt TradingStatistic bằng cookie ở ô **D2** sheet *Dashboard* (sheet của anh Si, dùng chung; đổi / xoá trong ⚙) — số khớp y hệt web. Cookie hết hạn → tự tính từ lịch sử ngày VNDirect (mất ~1 phút sau khi mở). |
+| MA10, MA20, MA50, % KL/TB (KL hôm nay so với **trung bình 45 phiên**) | Tự tính từ nến ngày VNDirect trên các phiên đã đóng, mỗi ngày một lần (~1 phút sau khi mở, lưu ở `hist.json`). Không cần cookie. Số có thể lệch nhẹ so với web Bee.vn (web dùng MA45 của FireAnt). |
 
 | Điều kiện thêm cần lịch sử giá (RSI, MFI, MACD, Bollinger, SMA/EMA, đỉnh / đáy, số phiên tăng giảm, KLTB) | Tự tính từ nến ngày VNDirect (~1 năm), công thức chép từ bộ lọc FireAnt Screener. **Chỉ tải khi có tiêu chí dùng đến**, mỗi ngày một lần (~1 phút cho cả thị trường, lưu ở `tech.json`) |
 | Điều kiện khung trong phiên (15 phút … 4 giờ) | Nến 15 phút (30 ngày gần nhất) và nến 1 giờ (90 ngày) VNDirect, chỉ tải loại nến mà tiêu chí dùng đến, lại sau mỗi lần chốt nến (~40 giây mỗi loại cho cả thị trường, lưu ở `intra.json`). Khung tuần gộp từ nến ngày, khỏi tải thêm |
 | % KL mua chủ động, nước ngoài mua ròng, KL dự kiến cả phiên | FireAnt (công khai), tính từ giá đang chạy |
 
-Ở chế độ đầy đủ, dòng trên bảng ghi rõ đang dùng nguồn nào: `MA: FireAnt` hoặc
-`MA: tự tính từ VNDirect (cookie FireAnt hết hạn)`. Cookie được làm mới trong sheet thì trong
-vòng 10 phút chương trình tự chuyển sang FireAnt.
+Ở chế độ đầy đủ, dòng trên bảng ghi `đang tính MA …%` lúc đang tải, xong thì ghi `MA: tự tính từ VNDirect`.
 
 ## Chia sẻ cho người khác
 
@@ -83,7 +81,7 @@ Máy người nhận **không cần cài Python** hay gì khác. Họ làm:
    tự mở khi bật máy, bảng giá hiện góc dưới-phải.
 4. Bấm **⚙** để đặt bộ lọc.
 
-Bản chia sẻ dùng chung sheet cookie FireAnt của anh Si cho cột MA.
+Cột MA tự tính, không cần cookie FireAnt.
 Gỡ: chuột phải lên bảng giá → **Gỡ khỏi máy…**
 
 Link tải luôn là bản mới nhất: https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/BeeVnMini.exe
