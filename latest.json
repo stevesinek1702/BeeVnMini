@@ -1,0 +1,7 @@
+{
+  "version": "1.9.1",
+  "url": "https://raw.githubusercontent.com/stevesinek1702/BeeVnMini/release/BeeVnMini.exe",
+  "size": 11580151,
+  "sha256": "b2c7a7e4d8522dd158a974449edb7d896172795a9feafbd67d9eff1c46323360",
+  "notes": "Bỏ cookie FireAnt: cột MA45 đổi thành MA50, MA10 / MA20 / MA50 tự tính từ VNDirect. Mở lần đầu mất khoảng 1 phút để tính MA."
+}
